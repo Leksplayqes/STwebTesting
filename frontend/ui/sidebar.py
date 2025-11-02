@@ -11,36 +11,37 @@ def sidebar_ui() -> None:
     st.subheader("Быстрые действия")
 
     api_base = st.session_state.get("api_base_url")
-    jobs = api_get(api_base, "/tests/jobs") or []
-    if not jobs:
+    records = api_get(api_base, "/tests/jobs") or []
+    if not records:
         st.info("Пока нет сохранённых тестов.")
         st.button("📊 Экспорт результатов", disabled=True, width='stretch')
         st.button("🧾 Экспорт JUnit XML", disabled=True, width='stretch')
     else:
-        job_ids = [job["id"] for job in jobs]
-        default = st.session_state.get("current_job_id") or job_ids[0]
-        if default not in job_ids:
-            default = job_ids[0]
-        selected = st.selectbox(
-            "Выберите тест (job_id) для экспорта:",
-            job_ids,
-            index=job_ids.index(default),
-            key="export_job_id",
-        )
-        job_url = f"{api_base}/tests/jobfile?job_id={selected}"
-        st.markdown(
-            f'<a href="{job_url}" download>'
-            f'<button class="st-emotion-cache-1vt4y43 ef3psqc12" style="width:100%;">📊 Экспорт результатов (JSON)</button>'
-            f'</a>',
-            unsafe_allow_html=True,
-        )
-        xml_url = f"{api_base}/tests/report?job_id={selected}"
-        st.markdown(
-            f'<a href="{xml_url}" download>'
-            f'<button class="st-emotion-cache-1vt4y43 ef3psqc12" style="width:100%;">🧾 Экспорт JUnit XML</button>'
-            f'</a>',
-            unsafe_allow_html=True,
-        )
+        job_ids = [record.get("id") for record in records if record.get("id")]
+        if not job_ids:
+            st.warning("Нет корректных записей для экспорта.")
+            st.button("📊 Экспорт результатов", disabled=True, width='stretch')
+            st.button("🧾 Экспорт JUnit XML", disabled=True, width='stretch')
+        else:
+            selected = st.selectbox(
+                "Выберите тест (job_id) для экспорта:",
+                job_ids,
+                key="sidebar_export_job_id",
+            )
+            job_url = f"{api_base}/tests/jobfile?job_id={selected}"
+            st.markdown(
+                f'<a href="{job_url}" download>'
+                f'<button class="st-emotion-cache-1vt4y43 ef3psqc12" style="width:100%;">📊 Экспорт результатов (JSON)</button>'
+                f'</a>',
+                unsafe_allow_html=True,
+            )
+            xml_url = f"{api_base}/tests/report?job_id={selected}"
+            st.markdown(
+                f'<a href="{xml_url}" download>'
+                f'<button class="st-emotion-cache-1vt4y43 ef3psqc12" style="width:100%;">🧾 Экспорт JUnit XML</button>'
+                f'</a>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown("---")
     st.subheader("Инструкция:")
