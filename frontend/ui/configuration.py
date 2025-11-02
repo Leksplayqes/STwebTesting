@@ -53,7 +53,15 @@ def render_configuration(api_base: str) -> None:
             key="test_type_radio",
             on_change=on_change,
         )
-        session_labels = st.session_state.get("selected_test_labels") or []
+        tests_by_type = st.session_state.setdefault(
+            "selected_tests_by_type", {"alarm": [], "sync": []}
+        )
+        labels_by_type = st.session_state.setdefault(
+            "selected_test_labels_by_type", {"alarm": [], "sync": []}
+        )
+        st.session_state["selected_tests"] = tests_by_type.get(test_type, [])
+        st.session_state["selected_test_labels"] = labels_by_type.get(test_type, [])
+        session_labels = labels_by_type.get(test_type, [])
         if test_type == "alarm":
             test_map: Dict[str, str] = ttypes.get("alarm_tests") or {}
             multiselect_key = "tests_ms_alarm"
@@ -71,6 +79,8 @@ def render_configuration(api_base: str) -> None:
             key=multiselect_key,
         )
         selected_nodeids = [test_map[label] for label in selected_labels]
+        labels_by_type[test_type] = selected_labels
+        tests_by_type[test_type] = selected_nodeids
         st.session_state["selected_test_labels"] = selected_labels
         st.session_state["selected_tests"] = selected_nodeids
         save_state()

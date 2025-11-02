@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import streamlit as st
 
@@ -18,6 +18,12 @@ def _default_viavi_config() -> Dict[str, Dict[str, Dict[str, str]]]:
     }
 
 
+def _default_selected_tests_map() -> Dict[str, List[str]]:
+    """Return the default storage for alarm and sync test selections."""
+
+    return {"alarm": [], "sync": []}
+
+
 def initialize_session_state() -> None:
     """Populate frequently used keys in :mod:`streamlit.session_state`."""
     st.session_state.setdefault("api_base_url", DEFAULT_API_BASE_URL)
@@ -28,6 +34,10 @@ def initialize_session_state() -> None:
     st.session_state.setdefault("test_type_radio", "alarm")
     st.session_state.setdefault("selected_tests", [])
     st.session_state.setdefault("selected_test_labels", [])
+    st.session_state.setdefault("selected_tests_by_type", _default_selected_tests_map())
+    st.session_state.setdefault(
+        "selected_test_labels_by_type", _default_selected_tests_map()
+    )
     st.session_state.setdefault("current_job_id", None)
     st.session_state.setdefault("viavi_config", _default_viavi_config())
 
@@ -54,6 +64,12 @@ def save_state() -> None:
         "port_loopback": st.session_state.get("port_loopback"),
         "selected_tests": st.session_state.get("selected_tests"),
         "selected_test_labels": st.session_state.get("selected_test_labels"),
+        "selected_tests_by_type": st.session_state.get(
+            "selected_tests_by_type", _default_selected_tests_map()
+        ),
+        "selected_test_labels_by_type": st.session_state.get(
+            "selected_test_labels_by_type", _default_selected_tests_map()
+        ),
         "current_job_id": st.session_state.get("current_job_id"),
     }
     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -74,11 +90,38 @@ def apply_state() -> None:
         "slot_loopback",
         "port_loopback",
         "current_job_id",
-        "selected_tests",
-        "selected_test_labels",
     ]:
         if key in saved:
             st.session_state[key] = saved[key]
+
+    tests_by_type = _default_selected_tests_map()
+    saved_tests_by_type = saved.get("selected_tests_by_type")
+    if isinstance(saved_tests_by_type, dict):
+        for key, value in saved_tests_by_type.items():
+            if key in tests_by_type and isinstance(value, list):
+                tests_by_type[key] = [item for item in value if isinstance(item, str)]
+    elif isinstance(saved.get("selected_tests"), list):
+        tests_by_type[saved.get("test_type_radio", "alarm")] = [
+            item for item in saved.get("selected_tests", []) if isinstance(item, str)
+        ]
+    st.session_state["selected_tests_by_type"] = tests_by_type
+
+    labels_by_type = _default_selected_tests_map()
+    saved_labels_by_type = saved.get("selected_test_labels_by_type")
+    if isinstance(saved_labels_by_type, dict):
+        for key, value in saved_labels_by_type.items():
+            if key in labels_by_type and isinstance(value, list):
+                labels_by_type[key] = [item for item in value if isinstance(item, str)]
+    elif isinstance(saved.get("selected_test_labels"), list):
+        labels_by_type[saved.get("test_type_radio", "alarm")] = [
+            item for item in saved.get("selected_test_labels", [])
+            if isinstance(item, str)
+        ]
+    st.session_state["selected_test_labels_by_type"] = labels_by_type
+
+    current_type = st.session_state.get("test_type_radio", "alarm")
+    st.session_state["selected_tests"] = tests_by_type.get(current_type, [])
+    st.session_state["selected_test_labels"] = labels_by_type.get(current_type, [])
 
     viavi_saved = saved.get("viavi_config")
     viavi = _default_viavi_config()
