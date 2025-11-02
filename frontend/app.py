@@ -10,10 +10,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from frontend.api import BackendApiClient
-from frontend.constants import BUTTON_STYLE, DEFAULT_API_BASE_URL, PAGE_CONFIG
-from frontend.state import apply_state, initialize_session_state
-from frontend.ui import render_configuration, render_results, render_utils, sidebar_ui
+from api import BackendApiClient
+from constants import BUTTON_STYLE, DEFAULT_API_BASE_URL, PAGE_CONFIG
+from state import apply_state, initialize_session_state
+from ui import render_configuration, render_results, render_utils, sidebar_ui
 
 
 st.set_page_config(**PAGE_CONFIG)
@@ -35,6 +35,9 @@ def main() -> None:
 
     with st.sidebar:
         sidebar_ui(client, api_base)
+
+    api_base = st.session_state.get("api_base_url", DEFAULT_API_BASE_URL)
+    client = BackendApiClient(api_base)
 
     tab1, tab2, tab3 = st.tabs(["⚙️ Конфигурация тестирования", "📊 Результаты тестирования", "🔧 Утилиты"])
     with tab1:
