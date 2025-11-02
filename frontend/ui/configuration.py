@@ -5,7 +5,7 @@ from typing import Dict, List
 
 import streamlit as st
 
-from api import get_device_info, get_test_types, ping_device, run_tests, _norm_nodeid
+from api import BackendApiClient, BackendApiError, normalise_nodeids
 from state import on_change, save_state, viavi_sync_from_widgets
 
 PORT_OPTIONS = ["", "STM-1", "STM-4", "STM-16"]
@@ -18,7 +18,7 @@ def _safe_index(options: List[str], value: str, default: int = 0) -> int:
         return default
 
 
-def render_configuration(api_base: str) -> None:
+def render_configuration(client: BackendApiClient) -> None:
     st.header("Конфигурация тестирования")
 
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -39,12 +39,34 @@ def render_configuration(api_base: str) -> None:
             on_change=on_change,
         )
         if st.button("Проверить подключение"):
-            if ping_device(api_base, ip):
-                get_device_info(api_base, ip, pw, snmp)
+            if client.ping_device(ip):
+                try:
+                    viavi_sync_from_widgets()
+                    loopback = {
+                        "slot": st.session_state.get("slot_loopback"),
+                        "port": st.session_state.get("port_loopback"),
+                    }
+                    viavi_cfg = st.session_state.get("viavi_config", {})
+                    info = client.fetch_device_info(
+                        ip=ip,
+                        password=pw,
+                        snmp_type=snmp,
+                        viavi={k: v for k, v in viavi_cfg.items() if v},
+                        loopback={k: v for k, v in loopback.items() if v},
+                    )
+                except BackendApiError as exc:
+                    st.error(f"Не удалось получить информацию об устройстве: {exc}")
+                else:
+                    st.session_state["device_info"] = info.model_dump()
+                    if info.viavi:
+                        st.session_state["viavi_config"] = info.viavi
+                    if info.loopback:
+                        st.session_state["saved_loopback"] = info.loopback
+                    save_state()
 
     with col2:
         st.subheader("Конфигурация тестов")
-        ttypes = get_test_types(api_base)
+        catalogs = client.get_test_catalogs()
         test_type = st.radio(
             "**Тип тестов**",
             ["alarm", "sync"],
@@ -63,10 +85,10 @@ def render_configuration(api_base: str) -> None:
         st.session_state["selected_test_labels"] = labels_by_type.get(test_type, [])
         session_labels = labels_by_type.get(test_type, [])
         if test_type == "alarm":
-            test_map: Dict[str, str] = ttypes.get("alarm_tests") or {}
+            test_map: Dict[str, str] = catalogs.alarm_tests
             multiselect_key = "tests_ms_alarm"
         else:
-            test_map = ttypes.get("sync_tests") or {}
+            test_map = catalogs.sync_tests
             multiselect_key = "tests_ms_sync"
 
         available_labels = list(test_map.keys())
@@ -182,7 +204,7 @@ def render_configuration(api_base: str) -> None:
 
     st.markdown("---")
     center = st.columns([1, 1, 1])[1]
-    nodeids = [_norm_nodeid(x) for x in (st.session_state.get("selected_tests") or []) if x.strip()]
+    nodeids = normalise_nodeids(st.session_state.get("selected_tests") or [])
     with center:
         if st.button("🚀 Запустить тесты"):
             if not nodeids:
@@ -192,10 +214,13 @@ def render_configuration(api_base: str) -> None:
                     "test_type": st.session_state.get("test_type_radio", "manual"),
                     "selected_tests": nodeids,
                 }
-                resp = run_tests(api_base, payload)
-                if resp and resp.get("job_id"):
-                    job_id = resp["job_id"]
-                    st.session_state["current_job_id"] = job_id
-                    st.success(f"Тесты запущены. job_id = {job_id}")
+                try:
+                    resp = client.run_tests(payload)
+                except BackendApiError as exc:
+                    st.error(f"Не удалось запустить тесты: {exc}")
                 else:
-                    st.error("Не удалось запустить тесты.")
+                    if resp.success and resp.job_id:
+                        st.session_state["current_job_id"] = resp.job_id
+                        st.success(f"Тесты запущены. job_id = {resp.job_id}")
+                    else:
+                        st.error(resp.error or "Не удалось запустить тесты.")

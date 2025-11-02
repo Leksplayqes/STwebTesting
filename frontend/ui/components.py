@@ -7,6 +7,8 @@ from typing import Any, Dict, Iterable, Optional
 import pandas as pd
 import streamlit as st
 
+from pydantic import BaseModel
+
 
 def _format_ts(ts: Optional[float]) -> str:
     if not ts:
@@ -15,6 +17,17 @@ def _format_ts(ts: Optional[float]) -> str:
         return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ""
+
+
+def _to_dict(record: Any) -> Dict[str, Any]:
+    if isinstance(record, BaseModel):
+        return record.model_dump()
+    if hasattr(record, "to_dict") and callable(getattr(record, "to_dict")):
+        try:
+            return record.to_dict()  # type: ignore[return-value]
+        except Exception:  # pragma: no cover - defensive
+            return dict(record)
+    return dict(record)
 
 
 def _describe_record(record: Dict[str, Any]) -> str:
@@ -39,46 +52,51 @@ def _describe_record(record: Dict[str, Any]) -> str:
 
 
 def render_runs_list(
-    records: Iterable[Dict[str, Any]],
+    records: Iterable[Any],
     *,
     key_prefix: str,
     title: Optional[str] = None,
     empty_message: str = "Нет запусков",
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Any]:
     """Render a table of execution records and return the selected entry."""
 
-    records = [rec for rec in records if rec.get("id")]
+    prepared = []
+    for rec in records:
+        data = _to_dict(rec)
+        if not data.get("id"):
+            continue
+        prepared.append((data, rec))
     if title:
         st.subheader(title)
-    if not records:
+    if not prepared:
         st.info(empty_message)
         return None
 
     data = []
-    for rec in records:
-        payload = rec.get("payload") or {}
+    for raw, _ in prepared:
+        payload = raw.get("payload") or {}
         summary = payload.get("summary") or {}
         duration = payload.get("duration")
         if duration is None:
             duration = summary.get("duration")
         data.append(
             {
-                "ID": rec.get("id"),
-                "Тип": rec.get("type"),
-                "Статус": rec.get("status"),
-                "Начало": _format_ts(rec.get("started_at") or payload.get("started")),
-                "Конец": _format_ts(rec.get("finished_at") or payload.get("finished")),
+                "ID": raw.get("id"),
+                "Тип": raw.get("type"),
+                "Статус": raw.get("status"),
+                "Начало": _format_ts(raw.get("started_at") or payload.get("started")),
+                "Конец": _format_ts(raw.get("finished_at") or payload.get("finished")),
                 "Длительность, c": round(float(duration or 0.0), 2)
                 if duration is not None
                 else "",
-                "Описание": _describe_record(rec),
+                "Описание": _describe_record(raw),
             }
         )
 
     df = pd.DataFrame(data)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    options = [rec.get("id") for rec in records]
+    options = [raw.get("id") for raw, _ in prepared]
     default_index = 0
     default_key = f"{key_prefix}_selected"
     if default_key in st.session_state:
@@ -92,7 +110,10 @@ def render_runs_list(
         index=default_index,
         key=default_key,
     )
-    return next((rec for rec in records if rec.get("id") == selected_id), None)
+    for raw, original in prepared:
+        if raw.get("id") == selected_id:
+            return original
+    return None
 
 
 __all__ = ["render_runs_list"]
