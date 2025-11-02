@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import streamlit as st
 
-from pydantic import BaseModel
-
 from frontend.api import BackendApiClient, BackendApiError
 
+from frontend.api import BackendApiClient, BackendApiError
 
 def sidebar_ui(client: BackendApiClient, api_base: str) -> None:
     st.markdown("")

@@ -90,7 +90,10 @@ def render_results(client: BackendApiClient) -> None:
         if not selected:
             return
 
-        selected_id = _extract_job_id(selected)
+        if isinstance(selected, TestRunRecord):
+            selected_id = selected.id
+        else:
+            selected_id = (selected or {}).get("id")
         if not selected_id:
             status_box.warning("Выберите прогон для отображения.")
             return

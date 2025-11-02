@@ -106,25 +106,5 @@ def render_utils(client: BackendApiClient) -> None:
         st.markdown("**Детали выбранного запуска:**")
         if isinstance(selected, UtilityJobRecord):
             st.json(selected.payload.model_dump())
-        elif hasattr(selected, "model_dump"):
-            try:
-                data = selected.model_dump()  # type: ignore[no-any-unimported]
-            except Exception:  # pragma: no cover - defensive
-                data = {}
-            st.json(data.get("payload") or {})
-        elif hasattr(selected, "payload"):
-            payload = getattr(selected, "payload", None)
-            if hasattr(payload, "model_dump"):
-                try:
-                    payload_data = payload.model_dump()  # type: ignore[no-any-unimported]
-                except Exception:  # pragma: no cover - defensive
-                    payload_data = {}
-                st.json(payload_data)
-            else:
-                st.json(payload or {})
         else:
-            try:
-                data = dict(selected)
-            except Exception:
-                data = {}
-            st.json(data.get("payload") or {})
+            st.json((selected or {}).get("payload") or {})
