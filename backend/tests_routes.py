@@ -17,8 +17,9 @@ from .config import PROJECT_ROOT, REPORT_DIR, ensure_config
 from .jobs import job_path, load_jobs_on_startup, save_job
 from .logs import add_log
 from .models import TestsRunRequest
+from .result_repository import TEST_RESULTS
 from .snmp_proxy import ensure_tunnel, register_tunnel_user, release_tunnel_user, tunnel_alive
-from .state import RUNNING_PROCS, TEST_JOBS
+from .state import RUNNING_PROCS
 from .test_catalogs import ALARM_TESTS_CATALOG, SYNC_TESTS_CATALOG
 
 router = APIRouter(prefix="/tests")
@@ -31,25 +32,15 @@ async def get_types() -> Dict[str, Dict[str, str]]:
 
 @router.get("/jobs")
 def list_jobs() -> List[Dict[str, object]]:
-    items: List[Dict[str, object]] = []
-    for job_id, job in TEST_JOBS.items():
-        items.append({
-            "id": job_id,
-            "started": job.get("started"),
-            "finished": job.get("finished"),
-            "summary": job.get("summary"),
-            "report": job.get("report"),
-        })
-    items.sort(key=lambda x: x["started"] or 0, reverse=True)
-    return items
+    return [record.to_dict() for record in TEST_RESULTS.list()]
 
 
 @router.get("/status")
 def tests_status(job_id: str):
-    job = TEST_JOBS.get(job_id)
-    if not job:
+    record = TEST_RESULTS.get(job_id)
+    if not record:
         raise HTTPException(status_code=404, detail="job not found")
-    return job
+    return record.to_dict()
 
 
 @router.post("/run")
@@ -70,33 +61,57 @@ def tests_run(req: TestsRunRequest, background_tasks: BackgroundTasks):
     except Exception as exc:
         add_log(f"ensure_tunnel pre-start failed: {exc}", "ERROR")
 
-    TEST_JOBS[job_id] = {
+    started = time.time()
+    job_payload: Dict[str, object] = {
         "id": job_id,
         "config": req.model_dump(),
-        "started": time.time(),
+        "started": started,
         "finished": None,
-        "summary": {"status": "running", "total": 0, "passed": 0, "failed": 0, "skipped": 0, "duration": 0.0},
+        "summary": {
+            "status": "running",
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "duration": 0.0,
+        },
         "cases": [],
         "stdout": "",
         "stderr": "",
         "returncode": None,
         "report": str((REPORT_DIR / f"{job_id}.xml").resolve()),
+        "expected_total": None,
     }
+    record = TEST_RESULTS.create(
+        record_id=job_id,
+        type="tests",
+        status="running",
+        payload=job_payload,
+        started_at=started,
+    )
+    save_job(job_id)
 
     background_tasks.add_task(_execute_tests, job_id, nodeids)
-    return {"success": True, "job_id": job_id}
+    return {"success": True, "job_id": job_id, "record": record.to_dict()}
 
 
 @router.post("/stop")
 def tests_stop(job_id: str = Query(...)):
-    job = TEST_JOBS.get(job_id)
+    record = TEST_RESULTS.get(job_id)
     proc = RUNNING_PROCS.get(job_id)
-    if not job:
+    if not record:
         return {"success": False, "error": "job not found"}
+    job = record.payload
     if not proc:
         if (job.get("summary") or {}).get("status") == "running":
             job["summary"]["status"] = "stopped"
             job["finished"] = time.time()
+            TEST_RESULTS.update(
+                job_id,
+                status="stopped",
+                payload=job,
+                finished_at=job["finished"],
+            )
             save_job(job_id)
         return {"success": True, "message": "job is not running"}
 
@@ -123,6 +138,12 @@ def tests_stop(job_id: str = Query(...)):
         "skipped": sum(1 for c in cases if c.get("status") == "SKIPPED"),
         "duration": sum(float(c.get("duration") or 0.0) for c in cases),
     }
+    TEST_RESULTS.update(
+        job_id,
+        status="stopped",
+        payload=job,
+        finished_at=job["finished"],
+    )
     save_job(job_id)
     try:
         release_tunnel_user(job_id)
@@ -141,13 +162,35 @@ def download_jobfile(job_id: str):
 
 @router.get("/report")
 def download_junit_xml(job_id: str):
-    job = TEST_JOBS.get(job_id)
-    if not job:
+    record = TEST_RESULTS.get(job_id)
+    if not record:
         raise HTTPException(status_code=404, detail="job not found")
-    report_path = job.get("report")
-    if not report_path or not os.path.exists(report_path):
-        raise HTTPException(status_code=404, detail="report not found")
-    return FileResponse(report_path, media_type="application/xml", filename=f"{job_id}.xml")
+
+    payload = record.payload if isinstance(record.payload, dict) else {}
+    candidates = []
+    seen = set()
+
+    def _add_candidate(path: str | None) -> None:
+        if not path:
+            return
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
+            return
+        seen.add(abs_path)
+        candidates.append(abs_path)
+
+    _add_candidate(payload.get("report"))
+    _add_candidate(str((REPORT_DIR / f"{job_id}.xml").resolve()))
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            if payload.get("report") != candidate:
+                payload["report"] = candidate
+                TEST_RESULTS.update(job_id, payload=payload)
+                save_job(job_id)
+            return FileResponse(candidate, media_type="application/xml", filename=f"{job_id}.xml")
+
+    raise HTTPException(status_code=404, detail="report not found")
 
 
 def _norm_nodeid(node_id: str) -> str:
@@ -221,9 +264,17 @@ def _parse_junit_report(xml_path: str):
 
 
 def _execute_tests(job_id: str, nodeids: List[str]) -> None:
+    record = TEST_RESULTS.get(job_id)
+    if not record:
+        return
+
     collect_re = re.compile(r"collected\s+(\d+)\s+items?")
-    TEST_JOBS[job_id]["expected_total"] = None
+    payload = record.payload
+    payload["expected_total"] = None
     report_path = str(REPORT_DIR / f"{job_id}.xml")
+    payload["report"] = report_path
+    TEST_RESULTS.update(job_id, payload=payload)
+    save_job(job_id)
 
     cmd = [
         sys.executable,
@@ -249,28 +300,36 @@ def _execute_tests(job_id: str, nodeids: List[str]) -> None:
 
     try:
         cases_map: Dict[str, Dict[str, object]] = {}
-        TEST_JOBS[job_id].update(
+        payload.update(
             {
                 "stdout": "",
                 "stderr": "",
                 "cases": [],
-                "summary": {"status": "running", "total": 0, "passed": 0, "failed": 0, "skipped": 0, "duration": 0.0},
+                "summary": {
+                    "status": "running",
+                    "total": 0,
+                    "passed": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "duration": 0.0,
+                },
             }
         )
+        TEST_RESULTS.update(job_id, status="running", payload=payload)
+        save_job(job_id)
         if proc.stdout is not None:
             for line in proc.stdout:
                 mcol = collect_re.search(line)
                 if mcol:
                     try:
-                        TEST_JOBS[job_id]["expected_total"] = int(mcol.group(1))
+                        payload["expected_total"] = int(mcol.group(1))
                     except Exception:
-                        pass
-                TEST_JOBS[job_id]["stdout"] += line
+                        payload["expected_total"] = None
+                payload["stdout"] += line
                 match = _VERBOSE_LINE.match(line.strip())
                 if match:
-                    nodeid = match.group("nodeid").strip()
+                    nodeid = _norm_nodeid(match.group("nodeid").strip())
                     status = match.group("status")
-                    nodeid = _norm_nodeid(nodeid)
                     case = cases_map.get(nodeid) or {
                         "name": nodeid.split("::")[-1],
                         "nodeid": nodeid,
@@ -280,12 +339,18 @@ def _execute_tests(job_id: str, nodeids: List[str]) -> None:
                     }
                     case["status"] = status
                     cases_map[nodeid] = case
-                    TEST_JOBS[job_id]["cases"] = list(cases_map.values())
-                    TEST_JOBS[job_id]["summary"] = _recalc_summary(TEST_JOBS[job_id]["cases"], finished=False)
+                    payload["cases"] = list(cases_map.values())
+                    payload["summary"] = _recalc_summary(payload["cases"], finished=False)
+                    TEST_RESULTS.update(
+                        job_id,
+                        status=payload["summary"].get("status", "running"),
+                        payload=payload,
+                    )
                     save_job(job_id)
         proc.wait()
-        TEST_JOBS[job_id]["returncode"] = proc.returncode
-        TEST_JOBS[job_id]["finished"] = time.time()
+        payload["returncode"] = proc.returncode
+        payload["finished"] = time.time()
+        TEST_RESULTS.update(job_id, payload=payload)
         save_job(job_id)
 
         try:
@@ -299,11 +364,17 @@ def _execute_tests(job_id: str, nodeids: List[str]) -> None:
                         merged["duration"] = merged.get("duration") or live.get("duration")
                         merged["message"] = merged.get("message") or live.get("message")
                         final_map[nodeid] = merged
-                TEST_JOBS[job_id]["cases"] = list(final_map.values())
-                TEST_JOBS[job_id]["summary"] = _recalc_summary(TEST_JOBS[job_id]["cases"], finished=True)
+                payload["cases"] = list(final_map.values())
+                payload["summary"] = _recalc_summary(payload["cases"], finished=True)
+                TEST_RESULTS.update(
+                    job_id,
+                    status=payload["summary"].get("status", "finished"),
+                    payload=payload,
+                    finished_at=payload.get("finished"),
+                )
                 save_job(job_id)
-            elif not TEST_JOBS[job_id]["cases"]:
-                TEST_JOBS[job_id]["summary"] = {
+            elif not payload.get("cases"):
+                payload["summary"] = {
                     "status": "error",
                     "total": 0,
                     "passed": 0,
@@ -312,17 +383,29 @@ def _execute_tests(job_id: str, nodeids: List[str]) -> None:
                     "duration": 0.0,
                     "message": "pytest did not produce junit xml; check stdout/stderr",
                 }
+                TEST_RESULTS.update(
+                    job_id,
+                    status="error",
+                    payload=payload,
+                    finished_at=payload.get("finished"),
+                )
                 save_job(job_id)
         except Exception as exc:
-            TEST_JOBS[job_id]["summary"] = {
+            payload["summary"] = {
                 "status": "error",
-                "total": len(TEST_JOBS[job_id].get("cases") or []),
+                "total": len(payload.get("cases") or []),
                 "passed": 0,
                 "failed": 1,
                 "skipped": 0,
                 "duration": 0.0,
                 "message": f"junit merge failed: {exc}",
             }
+            TEST_RESULTS.update(
+                job_id,
+                status="error",
+                payload=payload,
+                finished_at=payload.get("finished"),
+            )
             save_job(job_id)
     finally:
         RUNNING_PROCS.pop(job_id, None)
@@ -330,6 +413,13 @@ def _execute_tests(job_id: str, nodeids: List[str]) -> None:
             release_tunnel_user(job_id)
         except Exception:
             pass
+        if payload.get("finished") is None:
+            payload["finished"] = time.time()
+            TEST_RESULTS.update(
+                job_id,
+                payload=payload,
+                finished_at=payload["finished"],
+            )
         save_job(job_id)
 
 
