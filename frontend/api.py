@@ -52,16 +52,41 @@ def util_status(api_base: str, job_id: str):
     return api_get(api_base, f"/utils/status?job_id={job_id}") or {}
 
 
-def util_check_conf(api_base: str, ip: str, password: str):
-    return api_post(api_base, "/utils/check_conf", {"ip": ip, "password": password})
+def util_check_conf(
+    api_base: str,
+    ip: str,
+    password: str,
+    *,
+    iterations: int = 3,
+    delay: int = 30,
+):
+    payload = {
+        "ip": ip,
+        "password": password,
+        "iterations": iterations,
+        "delay": delay,
+    }
+    return api_post(api_base, "/utils/check_conf", payload)
 
 
 def util_check_hash(api_base: str, dir1: str, dir2: str):
     return api_post(api_base, "/utils/check_hash", {"dir1": dir1, "dir2": dir2})
 
 
-def util_fpga_reload(api_base: str, ip: str, password: str, slot: int = 9):
-    return api_post(api_base, "/utils/fpga_reload", {"ip": ip, "password": password, "slot": slot})
+def util_fpga_reload(
+    api_base: str,
+    ip: str,
+    password: str,
+    slot: int = 9,
+    max_attempts: int = 1000,
+):
+    payload = {
+        "ip": ip,
+        "password": password,
+        "slot": slot,
+        "max_attempts": max_attempts,
+    }
+    return api_post(api_base, "/utils/fpga_reload", payload)
 
 
 def ping_device(api_base: str, ip: str) -> bool:

@@ -2,52 +2,85 @@
 from __future__ import annotations
 
 import time
+from typing import Any, Dict
 
 import pandas as pd
 import streamlit as st
 
 from frontend.api import api_get, stop_test_job
-from frontend.state import _commit_test_result
+from frontend.ui.components import render_runs_list
+
+
+def _render_cases_table(cases: Any, container: st.delta_generator.DeltaGenerator) -> None:
+    if not cases:
+        container.info("Идёт сбор результатов…")
+        return
+    df = pd.DataFrame(
+        [
+            {
+                "Тест": case.get("nodeid") or case.get("name"),
+                "Статус": case.get("status"),
+                "Время, c": case.get("duration"),
+                "Сообщение": (case.get("message") or "")[:300],
+            }
+            for case in cases
+        ]
+    )
+    container.dataframe(df, use_container_width=True, hide_index=True)
 
 
 def render_results(api_base_url: str) -> None:
     st.header("Результаты тестирования")
 
-    jobs = api_get(api_base_url, "/tests/jobs", timeout=20) or []
-    if not jobs:
-        st.info("Пока нет ни одного прогона.")
-        return
-
-    job_ids = [job["id"] for job in jobs]
-    default_id = st.session_state.get("current_job_id") or job_ids[0]
-    if default_id not in job_ids:
-        default_id = job_ids[0]
-
-    st.write("Выберите прогон (job_id):")
-    col1, col2 = st.columns([4, 1], gap="small")
-    with col1:
-        selected_job = st.selectbox(
-            "null",
-            options=job_ids,
-            index=job_ids.index(default_id),
-            label_visibility="collapsed",
-        )
-        st.session_state["current_job_id"] = selected_job
-    with col2:
-        if st.button("🛑 Остановить тест", type="secondary", use_container_width=True):
-            stop_test_job(api_base_url, selected_job)
-
+    list_placeholder = st.container()
+    caption_box = st.empty()
+    stop_placeholder = st.empty()
     status_box = st.empty()
     table_box = st.empty()
     progress_box = st.empty()
 
-    for _ in range(900):  # до 30 минут
-        job = api_get(api_base_url, f"/tests/status?job_id={selected_job}", timeout=20) or {}
-        _commit_test_result(job, save_history=True)
+    job_id = None
 
-        summary = job.get("summary", {})
-        cases = job.get("cases", [])
-        expected_total = job.get("expected_total")
+    for _ in range(900):  # до 30 минут
+        records = api_get(api_base_url, "/tests/jobs", timeout=20) or []
+        with list_placeholder:
+            selected = render_runs_list(
+                records,
+                key_prefix="tests",
+                title="История прогонов",
+                empty_message="Пока нет ни одного прогона.",
+            )
+        if not selected:
+            return
+
+        selected_id = selected.get("id")
+        if not selected_id:
+            status_box.warning("Выберите прогон для отображения.")
+            return
+
+        if job_id != selected_id:
+            job_id = selected_id
+            caption_box.caption(f"Выбран прогон: {job_id}")
+            status_box.empty()
+            table_box.empty()
+            progress_box.empty()
+
+        if stop_placeholder.button(
+            "🛑 Остановить тест",
+            type="secondary",
+            key="stop_test_button",
+        ):
+            stop_test_job(api_base_url, job_id)
+
+        record = api_get(api_base_url, f"/tests/status?job_id={job_id}", timeout=20) or {}
+        if not record:
+            status_box.error("Не удалось получить состояние прогона.")
+            break
+        payload: Dict[str, Any] = record.get("payload") or {}
+
+        summary = payload.get("summary") or {}
+        cases = payload.get("cases") or []
+        expected_total = payload.get("expected_total")
         passed = summary.get("passed", 0)
         failed = summary.get("failed", 0)
         skipped = summary.get("skipped", 0)
@@ -60,21 +93,7 @@ def render_results(api_base_url: str) -> None:
             status_text += f" (готово {done} из {expected_total})"
         status_box.write(status_text)
 
-        if cases:
-            df = pd.DataFrame(
-                [
-                    {
-                        "Тест": (case.get("nodeid") or case.get("name")),
-                        "Статус": case.get("status"),
-                        "Время, c": case.get("duration"),
-                        "Сообщение": (case.get("message") or "")[:300],
-                    }
-                    for case in cases
-                ]
-            )
-            table_box.dataframe(df, use_container_width=True, hide_index=True)
-        else:
-            table_box.info("Идёт сбор результатов…")
+        _render_cases_table(cases, table_box)
 
         if expected_total:
             progress_box.progress(min(done / max(expected_total, 1), 1.0))
