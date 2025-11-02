@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import streamlit as st
 
@@ -11,8 +11,6 @@ from constants import DEFAULT_API_BASE_URL, STATE_FILE
 
 def initialize_session_state() -> None:
     """Populate frequently used keys in :mod:`streamlit.session_state`."""
-    st.session_state.setdefault("test_results", None)
-    st.session_state.setdefault("test_history", [])
     st.session_state.setdefault("api_base_url", DEFAULT_API_BASE_URL)
     st.session_state.setdefault("device_info", None)
     st.session_state.setdefault("ip_address_input", "")
@@ -53,8 +51,6 @@ def save_state() -> None:
         "port_loopback": st.session_state.get("port_loopback"),
         "selected_tests": st.session_state.get("selected_tests"),
         "selected_test_labels": st.session_state.get("selected_test_labels"),
-        "test_results": st.session_state.get("test_results"),
-        "test_history": st.session_state.get("test_history", []),
         "current_job_id": st.session_state.get("current_job_id"),
     }
     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -77,8 +73,6 @@ def apply_state() -> None:
         "viavi_config",
         "slot_loopback",
         "port_loopback",
-        "test_results",
-        "test_history",
         "current_job_id",
         "selected_tests",
         "selected_test_labels",
@@ -100,21 +94,6 @@ def apply_state() -> None:
 
 def on_change() -> None:
     save_state()
-
-
-def _commit_test_result(job: Optional[Dict[str, Any]], save_history: bool = True) -> None:
-    if not job:
-        return
-    st.session_state["test_results"] = job
-    summary = job.get("summary") or {}
-    status = (summary.get("status") or "").lower()
-    finished = status in {"passed", "failed", "error", "stopped"}
-    if save_history and finished:
-        jid = job.get("id")
-        history = st.session_state.get("test_history") or []
-        if not any(x.get("id") == jid for x in history):
-            history.append(job)
-            st.session_state["test_history"] = history
 
 
 def viavi_sync_from_widgets() -> None:
