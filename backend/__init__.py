@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from .app import app, create_app
-from .test_catalogs import ALARM_TESTS_CATALOG, SYNC_TESTS_CATALOG
+from shared.catalogs import ALARM_TESTS_CATALOG, SYNC_TESTS_CATALOG
 
 __all__ = [
     "app",

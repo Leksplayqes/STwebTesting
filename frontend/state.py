@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 import streamlit as st
 
-from constants import DEFAULT_API_BASE_URL, STATE_FILE
+from frontend.constants import DEFAULT_API_BASE_URL, STATE_FILE
 
 
 def _default_viavi_config() -> Dict[str, Dict[str, Dict[str, str]]]:

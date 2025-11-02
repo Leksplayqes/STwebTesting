@@ -123,13 +123,7 @@ class ResultRepository:
             return tuple(self._items.values())
 
 
-TEST_RESULTS = ResultRepository(limit=20)
-UTIL_RESULTS = ResultRepository(limit=50)
-
-
 __all__ = [
     "ResultRecord",
     "ResultRepository",
-    "TEST_RESULTS",
-    "UTIL_RESULTS",
 ]
