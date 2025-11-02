@@ -7,15 +7,15 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .config import JOBS_DIR
-from .result_repository import ResultRecord, TEST_RESULTS
+from .result_repository import ResultRecord, ResultRepository
 
 
 def job_path(job_id: str) -> Path:
     return JOBS_DIR / f"{job_id}.json"
 
 
-def save_job(job_id: str) -> None:
-    record = TEST_RESULTS.get(job_id)
+def save_job(job_id: str, repository: ResultRepository) -> None:
+    record = repository.get(job_id)
     if not record:
         return
     path = job_path(job_id)
@@ -46,7 +46,7 @@ def _record_from_legacy(job: Dict[str, Any]) -> ResultRecord:
     )
 
 
-def load_jobs_on_startup() -> None:
+def load_jobs_on_startup(repository: ResultRepository) -> None:
     for path in sorted(JOBS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime):
         try:
             with path.open("r", encoding="utf-8") as file:
@@ -66,7 +66,7 @@ def load_jobs_on_startup() -> None:
                 legacy = raw if isinstance(raw, dict) else {}
                 legacy.setdefault("id", legacy.get("id") or path.stem)
                 record = _record_from_legacy(legacy)
-            TEST_RESULTS.upsert(record)
+            repository.upsert(record)
         except Exception as exc:  # pragma: no cover - logging only
             print(f"[jobs] load failed {path.name}: {exc}")
 
