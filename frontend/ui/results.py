@@ -12,6 +12,34 @@ from frontend.models import TestRunRecord
 from frontend.ui.components import render_runs_list
 
 
+def _extract_job_id(selected: Any) -> str | None:
+    """Best-effort extraction of a job identifier from various record types."""
+
+    if selected is None:
+        return None
+    if isinstance(selected, TestRunRecord):
+        return selected.id
+    if hasattr(selected, "model_dump"):
+        try:
+            data = selected.model_dump()  # type: ignore[no-any-unimported]
+        except Exception:  # pragma: no cover - defensive
+            data = {}
+        else:
+            return str(data.get("id")) if data.get("id") is not None else None
+    if hasattr(selected, "id"):
+        job_id = getattr(selected, "id", None)
+        return str(job_id) if job_id is not None else None
+    if isinstance(selected, dict):
+        job_id = selected.get("id")
+        return str(job_id) if job_id is not None else None
+    try:
+        data = dict(selected)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    job_id = data.get("id")
+    return str(job_id) if job_id is not None else None
+
+
 def _render_cases_table(cases: Any, container: st.delta_generator.DeltaGenerator) -> None:
     if not cases:
         container.info("Идёт сбор результатов…")
