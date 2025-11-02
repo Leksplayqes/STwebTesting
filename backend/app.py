@@ -6,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .common import router as common_router
 from .device import router as device_router
-from .tests_routes import router as tests_router, load_jobs_on_startup
+from .services import get_test_service
+from .tests_routes import router as tests_router
 from .tunnel_routes import router as tunnel_router
 from .utils_routes import router as utils_router
 
@@ -29,7 +30,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup() -> None:  # pragma: no cover - FastAPI lifecycle
-        load_jobs_on_startup()
+        get_test_service()
 
     return app
 

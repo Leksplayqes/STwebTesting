@@ -1,175 +1,208 @@
-"""HTTP helper functions and backend integrations for the frontend."""
+"""HTTP API client used by the Streamlit frontend."""
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import requests
-import streamlit as st
+
+from shared.catalogs import ALARM_TESTS_CATALOG, SYNC_TESTS_CATALOG
+
+from frontend.models import (
+    DeviceInfo,
+    StopTestResponse,
+    TestCatalogs,
+    TestRunRecord,
+    TestRunResponse,
+    UtilityJobRecord,
+    UtilityJobResponse,
+)
 
 
-from state import save_state, viavi_sync_from_widgets
-from backend.test_catalogs import  ALARM_TESTS_CATALOG, SYNC_TESTS_CATALOG
+class BackendApiError(RuntimeError):
+    """Raised when the backend API request fails."""
 
 
-def api_post(api_base: str, path: str, payload: Optional[Dict[str, Any]] = None, timeout: int = 30):
-    try:
-        response = requests.post(f"{api_base}{path}", json=payload or {}, timeout=timeout)
-        response.raise_for_status()
-        return response.json()
-    except requests.HTTPError as http_error:
-        body = ""
+class BackendApiClient:
+    """Typed client wrapper around backend REST endpoints."""
+
+    def __init__(self, base_url: str, *, default_timeout: int = 30) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._session = requests.Session()
+        self._default_timeout = default_timeout
+        self._catalog_cache: Optional[tuple[float, TestCatalogs]] = None
+        self._catalog_ttl = 30
+
+    # Low level helpers ------------------------------------------------
+    def _build_url(self, path: str) -> str:
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"{self._base_url}{path}"
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: Optional[int] = None,
+        params: Optional[Dict[str, Any]] = None,
+        json: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        url = self._build_url(path)
         try:
-            body = response.text[:400]
-        except Exception:
-            pass
-        st.error(f"POST {path}: {http_error} | body: {body}")
-        return None
-    except Exception as exc:
-        st.error(f"POST {path}: {exc}")
-        return None
+            response = self._session.request(
+                method,
+                url,
+                timeout=timeout or self._default_timeout,
+                params=params,
+                json=json,
+            )
+        except requests.RequestException as exc:  # pragma: no cover - thin wrapper
+            raise BackendApiError(f"{method} {path}: {exc}") from exc
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:  # pragma: no cover - thin wrapper
+            body = (response.text or "")[:400]
+            raise BackendApiError(f"{method} {path}: {exc} | body: {body}") from exc
+        if not response.content:
+            return {}
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise BackendApiError(f"{method} {path}: invalid JSON response") from exc
 
+    def _get(self, path: str, *, timeout: Optional[int] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self._request("GET", path, timeout=timeout, params=params)
 
-def api_get(api_base: str, path: str, timeout: int = 30):
-    try:
-        response = requests.get(f"{api_base}{path}", timeout=timeout)
+    def _post(
+        self,
+        path: str,
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        timeout: Optional[int] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return self._request("POST", path, timeout=timeout, params=params, json=payload or {})
+
+    # Tests ------------------------------------------------------------
+    def get_test_catalogs(self) -> TestCatalogs:
+        now = time.time()
+        if self._catalog_cache and now - self._catalog_cache[0] < self._catalog_ttl:
+            return self._catalog_cache[1]
+        try:
+            data = self._get("/tests/types")
+        except BackendApiError:
+            data = {
+                "alarm_tests": ALARM_TESTS_CATALOG,
+                "sync_tests": SYNC_TESTS_CATALOG,
+            }
+        catalogs = TestCatalogs.model_validate(data or {})
+        self._catalog_cache = (now, catalogs)
+        return catalogs
+
+    def list_test_jobs(self) -> List[TestRunRecord]:
+        data = self._get("/tests/jobs")
+        return [TestRunRecord.model_validate(item) for item in data or []]
+
+    def get_test_status(self, job_id: str) -> TestRunRecord:
+        data = self._get("/tests/status", params={"job_id": job_id})
+        return TestRunRecord.model_validate(data)
+
+    def run_tests(self, payload: Dict[str, Any]) -> TestRunResponse:
+        data = self._post("/tests/run", payload, timeout=120)
+        return TestRunResponse.model_validate(data)
+
+    def stop_test(self, job_id: str) -> StopTestResponse:
+        data = self._post("/tests/stop", params={"job_id": job_id})
+        return StopTestResponse.model_validate(data)
+
+    def download_jobfile(self, job_id: str) -> bytes:
+        response = self._session.get(self._build_url("/tests/jobfile"), params={"job_id": job_id})
         response.raise_for_status()
-        return response.json()
-    except Exception as exc:
-        st.error(f"GET {path}: {exc}")
-        return None
+        return response.content
+
+    # Utilities --------------------------------------------------------
+    def list_util_jobs(self) -> List[UtilityJobRecord]:
+        data = self._get("/utils/jobs")
+        return [UtilityJobRecord.model_validate(item) for item in data or []]
+
+    def get_util_status(self, job_id: str) -> UtilityJobRecord:
+        data = self._get("/utils/status", params={"job_id": job_id})
+        return UtilityJobRecord.model_validate(data)
+
+    def run_check_conf(
+        self,
+        *,
+        ip: str,
+        password: str,
+        iterations: int = 3,
+        delay: int = 30,
+    ) -> UtilityJobResponse:
+        payload = {
+            "ip": ip,
+            "password": password,
+            "iterations": iterations,
+            "delay": delay,
+        }
+        data = self._post("/utils/check_conf", payload)
+        return UtilityJobResponse.model_validate(data)
+
+    def run_check_hash(self, *, dir1: str, dir2: str) -> UtilityJobResponse:
+        payload = {"dir1": dir1, "dir2": dir2}
+        data = self._post("/utils/check_hash", payload)
+        return UtilityJobResponse.model_validate(data)
+
+    def run_fpga_reload(
+        self,
+        *,
+        ip: str,
+        password: str,
+        slot: int = 9,
+        max_attempts: int = 1000,
+    ) -> UtilityJobResponse:
+        payload = {
+            "ip": ip,
+            "password": password,
+            "slot": slot,
+            "max_attempts": max_attempts,
+        }
+        data = self._post("/utils/fpga_reload", payload)
+        return UtilityJobResponse.model_validate(data)
+
+    # Device -----------------------------------------------------------
+    def ping_device(self, ip: str) -> bool:
+        try:
+            data = self._post("/ping", {"ip_address": ip})
+        except BackendApiError:
+            return False
+        return bool(data.get("success")) if data else False
+
+    def fetch_device_info(
+        self,
+        *,
+        ip: str,
+        password: str,
+        snmp_type: str,
+        viavi: Optional[Dict[str, Any]] = None,
+        loopback: Optional[Dict[str, Any]] = None,
+    ) -> DeviceInfo:
+        payload = {
+            "ip_address": ip,
+            "password": password,
+            "snmp_type": snmp_type,
+            "viavi": viavi or {},
+            "loopback": loopback or {},
+        }
+        data = self._post("/device/info", payload, timeout=500)
+        return DeviceInfo.model_validate(data or {})
 
 
-def _norm_nodeid(node_id: str) -> str:
-    return node_id.replace(" ::", "::").replace(":: ", "::").replace(" / ", "/").strip()
-
-
-def util_jobs(api_base: str):
-    return api_get(api_base, "/utils/jobs") or []
-
-
-def util_status(api_base: str, job_id: str):
-    return api_get(api_base, f"/utils/status?job_id={job_id}") or {}
-
-
-def util_check_conf(
-    api_base: str,
-    ip: str,
-    password: str,
-    *,
-    iterations: int = 3,
-    delay: int = 30,
-):
-    payload = {
-        "ip": ip,
-        "password": password,
-        "iterations": iterations,
-        "delay": delay,
-    }
-    return api_post(api_base, "/utils/check_conf", payload)
-
-
-def util_check_hash(api_base: str, dir1: str, dir2: str):
-    return api_post(api_base, "/utils/check_hash", {"dir1": dir1, "dir2": dir2})
-
-
-def util_fpga_reload(
-    api_base: str,
-    ip: str,
-    password: str,
-    slot: int = 9,
-    max_attempts: int = 1000,
-):
-    payload = {
-        "ip": ip,
-        "password": password,
-        "slot": slot,
-        "max_attempts": max_attempts,
-    }
-    return api_post(api_base, "/utils/fpga_reload", payload)
-
-
-def ping_device(api_base: str, ip: str) -> bool:
-    data = api_post(api_base, "/ping", {"ip_address": ip})
-    return bool(data and data.get("success"))
-
-
-def get_device_info(api_base: str, ip: str, password: str, snmp: str):
-    viavi_sync_from_widgets()
-    loopback = {
-        "slot": st.session_state.get("slot_loopback"),
-        "port": st.session_state.get("port_loopback"),
-    }
-    payload = {
-        "ip_address": ip,
-        "password": password,
-        "snmp_type": snmp,
-        "viavi": st.session_state.get("viavi_config", {}),
-        "loopback": {k: v for k, v in loopback.items() if v},
-    }
-    data = api_post(api_base, "/device/info", payload, timeout=500)
-    if not data:
-        return None
-
-    st.session_state["device_info"] = {
-        "name": data.get("name"),
-        "ipaddr": data.get("ipaddr"),
-        "slots_dict": data.get("slots_dict") or {},
-    }
-    st.session_state["viavi_config"] = data.get("viavi") or st.session_state["viavi_config"]
-    st.session_state["saved_loopback"] = data.get("loopback") or {}
-    save_state()
-    return st.session_state["device_info"]
-
-
-def _catalog_fallback() -> Dict[str, Dict[str, str]]:
-    return {
-        "alarm_tests": ALARM_TESTS_CATALOG,
-        "sync_tests": SYNC_TESTS_CATALOG,
-    }
-
-
-def get_test_types(api_base: str, cache_ttl: int = 30):
-    cache = st.session_state.get("_test_types_cache")
-    now = time.time()
-    if cache and now - cache.get("ts", 0) < cache_ttl:
-        return cache["data"]
-
-    data = api_get(api_base, "/tests/types") or _catalog_fallback()
-    st.session_state["_test_types_cache"] = {"ts": now, "data": data}
-    return data
-
-
-def run_tests(api_base: str, cfg: Dict[str, Any]):
-    return api_post(api_base, "/tests/run", cfg, timeout=120)
-
-
-def stop_test_job(api_base: str, job_id: str):
-    try:
-        response = requests.post(f"{api_base}/tests/stop?job_id={job_id}", timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        if data.get("success"):
-            st.success(f"Тест {job_id} остановлен.")
-        else:
-            st.warning(f"Не удалось остановить тест: {data.get('error')}")
-    except Exception as exc:
-        st.error(f"Ошибка остановки теста: {exc}")
+def normalise_nodeids(nodeids: Iterable[str]) -> List[str]:
+    return [node.replace(" ::", "::").replace(":: ", "::").replace(" / ", "/").strip() for node in nodeids]
 
 
 __all__ = [
-    "api_get",
-    "api_post",
-    "get_device_info",
-    "get_test_types",
-    "ping_device",
-    "run_tests",
-    "stop_test_job",
-    "util_check_conf",
-    "util_check_hash",
-    "util_fpga_reload",
-    "util_jobs",
-    "util_status",
-    "viavi_sync_from_widgets",
-    "_norm_nodeid",
+    "BackendApiClient",
+    "BackendApiError",
+    "normalise_nodeids",
 ]

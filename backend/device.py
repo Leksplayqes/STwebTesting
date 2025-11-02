@@ -4,15 +4,14 @@ from __future__ import annotations
 import threading
 from typing import Any, Dict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from MainConnectFunc import equpimentV7, get_device_info
 
 from .config import ensure_config, json_input, json_set
 from .logs import add_log
 from .models import DeviceInfoRequest, ViaviSettings, ViaviUnitSettings
-from .snmp_proxy import TunnelManagerError, reserve_tunnel
-from .state import ACTIVE_TUNNEL_LEASES, ACTIVE_TUNNEL_LOCK
+from .services import TunnelManagerError, TunnelService, get_tunnel_service
 
 router = APIRouter(tags=["device"])
 
@@ -39,7 +38,10 @@ def _save_viavi_settings(settings: ViaviSettings) -> None:
 
 
 @router.post("/device/info")
-async def device_info(req: DeviceInfoRequest) -> Dict[str, Any]:
+async def device_info(
+    req: DeviceInfoRequest,
+    tunnel_service: TunnelService = Depends(get_tunnel_service),
+) -> Dict[str, Any]:
     try:
         ensure_config()
     except Exception as exc:
@@ -60,20 +62,15 @@ async def device_info(req: DeviceInfoRequest) -> Dict[str, Any]:
 
     def _run_proxy() -> None:
         try:
-            with ACTIVE_TUNNEL_LOCK:
-                old = ACTIVE_TUNNEL_LEASES.pop(lease_key, None)
-            if old:
-                old.release()
-            lease = reserve_tunnel(
+            lease = tunnel_service.reserve(
                 lease_key,
                 "device",
                 ip=ip,
                 username=username,
                 password=password,
                 ttl=900.0,
+                track=True,
             )
-            with ACTIVE_TUNNEL_LOCK:
-                ACTIVE_TUNNEL_LEASES[lease_key] = lease
             add_log(
                 f"SNMP tunnel ready at {lease.host}:{lease.port} for {ip}",
                 "INFO",
