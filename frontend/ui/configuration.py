@@ -186,7 +186,6 @@ def render_configuration(api_base: str) -> None:
                 if resp and resp.get("job_id"):
                     job_id = resp["job_id"]
                     st.session_state["current_job_id"] = job_id
-                    st.session_state["test_results"] = None
                     st.success(f"Тесты запущены. job_id = {job_id}")
                 else:
                     st.error("Не удалось запустить тесты.")
