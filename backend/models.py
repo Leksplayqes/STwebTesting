@@ -51,6 +51,24 @@ class TestsRunRequest(BaseModel):
     settings: Optional[Dict[str, Any]] = None
 
 
+class TunnelLeaseModel(BaseModel):
+    owner_id: str
+    owner_kind: str
+    port: int
+    created_at: float
+    expires_at: float
+    ttl: float
+    device_ip: str
+    username: str
+    last_heartbeat: float
+
+
+class TunnelStatusResponse(BaseModel):
+    alive: bool
+    configured_ports: List[int]
+    leases: List[TunnelLeaseModel]
+
+
 __all__ = [
     "LogEntry",
     "LogsResponse",
@@ -60,4 +78,6 @@ __all__ = [
     "ViaviSettings",
     "DeviceInfoRequest",
     "TestsRunRequest",
+    "TunnelLeaseModel",
+    "TunnelStatusResponse",
 ]

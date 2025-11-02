@@ -1,46 +1,76 @@
 """Helpers to manage the SNMP-over-SSH proxy process."""
 from __future__ import annotations
 
-import threading
+from typing import Dict, List, Optional
 
 from snmpsubsystem import ProxyController
 
+from .config import DEFAULT_TUNNEL_PORTS, get_tunnel_ports
+from .tunnel_manager import (
+    TunnelConfigurationError,
+    TunnelLease,
+    TunnelManager,
+    TunnelManagerError,
+    TunnelPortsBusyError,
+)
+
+
+def _configured_ports() -> List[int]:
+    try:
+        return get_tunnel_ports()
+    except Exception:
+        return DEFAULT_TUNNEL_PORTS.copy()
+
+
 SNMP_PROXY = ProxyController()
-SNMP_PROXY_LOCK = threading.Lock()
-_TUNNEL_LOCK = threading.RLock()
-_ACTIVE_TUNNEL_JOBS: set[str] = set()
+TUNNEL_MANAGER = TunnelManager(SNMP_PROXY, ports=_configured_ports())
+
+
+def reserve_tunnel(
+    owner_id: str,
+    owner_kind: str,
+    *,
+    ip: str,
+    username: str,
+    password: str,
+    ttl: Optional[float] = None,
+) -> TunnelLease:
+    return TUNNEL_MANAGER.lease(
+        owner_id,
+        owner_kind,
+        ip=ip,
+        username=username,
+        password=password,
+        ttl=ttl,
+    )
+
+
+def release_tunnel(owner_id: str) -> None:
+    TUNNEL_MANAGER.release(owner_id)
+
+
+def heartbeat_tunnel(owner_id: str, ttl: Optional[float] = None) -> None:
+    TUNNEL_MANAGER.heartbeat(owner_id, ttl=ttl)
 
 
 def tunnel_alive() -> bool:
-    return bool(SNMP_PROXY.proxy and SNMP_PROXY.proxy._proc_alive())
+    return TUNNEL_MANAGER.tunnel_alive()
 
 
-def ensure_tunnel(ip: str, username: str, password: str) -> None:
-    with _TUNNEL_LOCK:
-        if not tunnel_alive():
-            SNMP_PROXY.start(ip=ip, username=username, password=password)
-
-
-def register_tunnel_user(job_id: str) -> None:
-    with _TUNNEL_LOCK:
-        _ACTIVE_TUNNEL_JOBS.add(job_id)
-
-
-def release_tunnel_user(job_id: str) -> None:
-    with _TUNNEL_LOCK:
-        _ACTIVE_TUNNEL_JOBS.discard(job_id)
-        if not _ACTIVE_TUNNEL_JOBS:
-            try:
-                SNMP_PROXY.close()
-            except Exception:  # pragma: no cover - defensive
-                pass
+def describe_tunnels() -> List[Dict[str, object]]:
+    return TUNNEL_MANAGER.active_leases()
 
 
 __all__ = [
     "SNMP_PROXY",
-    "SNMP_PROXY_LOCK",
+    "TUNNEL_MANAGER",
+    "TunnelManagerError",
+    "TunnelPortsBusyError",
+    "TunnelConfigurationError",
+    "TunnelLease",
+    "reserve_tunnel",
+    "release_tunnel",
+    "heartbeat_tunnel",
     "tunnel_alive",
-    "ensure_tunnel",
-    "register_tunnel_user",
-    "release_tunnel_user",
+    "describe_tunnels",
 ]

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .common import router as common_router
 from .device import router as device_router
 from .tests_routes import router as tests_router, load_jobs_on_startup
+from .tunnel_routes import router as tunnel_router
 from .utils_routes import router as utils_router
 
 
@@ -23,6 +24,7 @@ def create_app() -> FastAPI:
     app.include_router(common_router)
     app.include_router(device_router)
     app.include_router(tests_router)
+    app.include_router(tunnel_router)
     app.include_router(utils_router)
 
     @app.on_event("startup")
