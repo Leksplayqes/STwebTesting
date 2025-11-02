@@ -8,7 +8,7 @@ import requests
 
 from shared.catalogs import ALARM_TESTS_CATALOG, SYNC_TESTS_CATALOG
 
-from frontend.models import (
+from .models import (
     DeviceInfo,
     StopTestResponse,
     TestCatalogs,

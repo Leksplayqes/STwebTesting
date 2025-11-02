@@ -64,15 +64,8 @@ def render_results(client: BackendApiClient) -> None:
 
         if isinstance(selected, TestRunRecord):
             selected_id = selected.id
-        elif hasattr(selected, "id"):
-            selected_id = getattr(selected, "id", None)
-        elif isinstance(selected, dict):
-            selected_id = selected.get("id")
         else:
-            try:
-                selected_id = dict(selected).get("id")  # type: ignore[arg-type]
-            except Exception:
-                selected_id = None
+            selected_id = (selected or {}).get("id")
         if not selected_id:
             status_box.warning("Выберите прогон для отображения.")
             return
