@@ -79,7 +79,6 @@ def tests_run(req: TestsRunRequest, background_tasks: BackgroundTasks):
         "stdout": "",
         "stderr": "",
         "returncode": None,
-        "report": str((REPORT_DIR / f"{job_id}.xml").resolve()),
         "expected_total": None,
     }
     record = TEST_RESULTS.create(
@@ -160,18 +159,6 @@ def download_jobfile(job_id: str):
     return FileResponse(str(path), media_type="application/json", filename=f"{job_id}.json")
 
 
-@router.get("/report")
-def download_junit_xml(job_id: str):
-    record = TEST_RESULTS.get(job_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="job not found")
-    payload = record.payload
-    report_path = payload.get("report") if isinstance(payload, dict) else None
-    if not report_path or not os.path.exists(report_path):
-        raise HTTPException(status_code=404, detail="report not found")
-    return FileResponse(report_path, media_type="application/xml", filename=f"{job_id}.xml")
-
-
 def _norm_nodeid(node_id: str) -> str:
     return node_id.replace(" ::", "::").replace(":: ", "::").replace(" / ", "/").strip()
 
@@ -250,8 +237,9 @@ def _execute_tests(job_id: str, nodeids: List[str]) -> None:
     collect_re = re.compile(r"collected\s+(\d+)\s+items?")
     payload = record.payload
     payload["expected_total"] = None
+    # Pytest still writes a junitxml file so we can merge the final case details,
+    # but the path is kept internal and is no longer exposed via the API.
     report_path = str(REPORT_DIR / f"{job_id}.xml")
-    payload["report"] = report_path
     TEST_RESULTS.update(job_id, payload=payload)
     save_job(job_id)
 

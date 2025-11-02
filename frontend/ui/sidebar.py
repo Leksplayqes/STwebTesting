@@ -20,7 +20,6 @@ def sidebar_ui() -> None:
         if not job_ids:
             st.warning("Нет корректных записей для экспорта.")
             st.button("📊 Экспорт результатов", disabled=True, width='stretch')
-            st.button("🧾 Экспорт JUnit XML", disabled=True, width='stretch')
         else:
             selected = st.selectbox(
                 "Выберите тест (job_id) для экспорта:",
@@ -31,13 +30,6 @@ def sidebar_ui() -> None:
             st.markdown(
                 f'<a href="{job_url}" download>'
                 f'<button class="st-emotion-cache-1vt4y43 ef3psqc12" style="width:100%;">📊 Экспорт результатов (JSON)</button>'
-                f'</a>',
-                unsafe_allow_html=True,
-            )
-            xml_url = f"{api_base}/tests/report?job_id={selected}"
-            st.markdown(
-                f'<a href="{xml_url}" download>'
-                f'<button class="st-emotion-cache-1vt4y43 ef3psqc12" style="width:100%;">🧾 Экспорт JUnit XML</button>'
                 f'</a>',
                 unsafe_allow_html=True,
             )
