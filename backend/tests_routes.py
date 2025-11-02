@@ -160,39 +160,6 @@ def download_jobfile(job_id: str):
     return FileResponse(str(path), media_type="application/json", filename=f"{job_id}.json")
 
 
-@router.get("/report")
-def download_junit_xml(job_id: str):
-    record = TEST_RESULTS.get(job_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    payload = record.payload if isinstance(record.payload, dict) else {}
-    candidates = []
-    seen = set()
-
-    def _add_candidate(path: str | None) -> None:
-        if not path:
-            return
-        abs_path = os.path.abspath(path)
-        if abs_path in seen:
-            return
-        seen.add(abs_path)
-        candidates.append(abs_path)
-
-    _add_candidate(payload.get("report"))
-    _add_candidate(str((REPORT_DIR / f"{job_id}.xml").resolve()))
-
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            if payload.get("report") != candidate:
-                payload["report"] = candidate
-                TEST_RESULTS.update(job_id, payload=payload)
-                save_job(job_id)
-            return FileResponse(candidate, media_type="application/xml", filename=f"{job_id}.xml")
-
-    raise HTTPException(status_code=404, detail="report not found")
-
-
 def _norm_nodeid(node_id: str) -> str:
     return node_id.replace(" ::", "::").replace(":: ", "::").replace(" / ", "/").strip()
 
