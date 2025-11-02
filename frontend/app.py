@@ -1,8 +1,10 @@
 """Entry point assembling the modular Streamlit frontend."""
 from __future__ import annotations
 
+import os
+import sys
+
 import streamlit as st
-import os, sys
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
@@ -28,8 +30,11 @@ def main() -> None:
     apply_state()
     initialize_session_state()
 
+    api_base = st.session_state.get("api_base_url", DEFAULT_API_BASE_URL)
+    client = BackendApiClient(api_base)
+
     with st.sidebar:
-        sidebar_ui()
+        sidebar_ui(client, api_base)
 
     api_base = st.session_state.get("api_base_url", DEFAULT_API_BASE_URL)
     client = BackendApiClient(api_base)
