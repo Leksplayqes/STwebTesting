@@ -9,6 +9,15 @@ import streamlit as st
 from constants import DEFAULT_API_BASE_URL, STATE_FILE
 
 
+def _default_viavi_config() -> Dict[str, Dict[str, Dict[str, str]]]:
+    """Return a fresh empty Viavi configuration structure."""
+
+    return {
+        "NumOne": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
+        "NumTwo": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
+    }
+
+
 def initialize_session_state() -> None:
     """Populate frequently used keys in :mod:`streamlit.session_state`."""
     st.session_state.setdefault("api_base_url", DEFAULT_API_BASE_URL)
@@ -20,10 +29,7 @@ def initialize_session_state() -> None:
     st.session_state.setdefault("selected_tests", [])
     st.session_state.setdefault("selected_test_labels", [])
     st.session_state.setdefault("current_job_id", None)
-    st.session_state.setdefault("viavi_config", {
-        "NumOne": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
-        "NumTwo": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
-    })
+    st.session_state.setdefault("viavi_config", _default_viavi_config())
 
 
 def load_state() -> Dict[str, Any]:
@@ -43,10 +49,7 @@ def save_state() -> None:
         "password_input": st.session_state.get("password_input", ""),
         "snmp_type_select": st.session_state.get("snmp_type_select", "SnmpV2"),
         "test_type_radio": st.session_state.get("test_type_radio", "alarm"),
-        "viavi_config": st.session_state.get("viavi_config", {
-            "NumOne": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
-            "NumTwo": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
-        }),
+        "viavi_config": st.session_state.get("viavi_config", _default_viavi_config()),
         "slot_loopback": st.session_state.get("slot_loopback"),
         "port_loopback": st.session_state.get("port_loopback"),
         "selected_tests": st.session_state.get("selected_tests"),
@@ -61,35 +64,42 @@ def apply_state() -> None:
     if not saved:
         return
 
-    if "device_info" in saved and "device_info" not in st.session_state:
-        st.session_state["device_info"] = saved["device_info"]
-
     for key in [
         "api_base_url",
+        "device_info",
         "ip_address_input",
         "password_input",
         "snmp_type_select",
         "test_type_radio",
-        "viavi_config",
         "slot_loopback",
         "port_loopback",
         "current_job_id",
         "selected_tests",
         "selected_test_labels",
     ]:
-        if key in saved and key not in st.session_state:
+        if key in saved:
             st.session_state[key] = saved[key]
 
-    viavi = st.session_state.get("viavi_config", {
-        "NumOne": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
-        "NumTwo": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
-    })
-    st.session_state.setdefault("viavi1_ip", viavi["NumOne"]["ipaddr"])
-    st.session_state.setdefault("viavi1_port1", viavi["NumOne"]["typeofport"]["Port1"])
-    st.session_state.setdefault("viavi1_port2", viavi["NumOne"]["typeofport"]["Port2"])
-    st.session_state.setdefault("viavi2_ip", viavi["NumTwo"]["ipaddr"])
-    st.session_state.setdefault("viavi2_port1", viavi["NumTwo"]["typeofport"]["Port1"])
-    st.session_state.setdefault("viavi2_port2", viavi["NumTwo"]["typeofport"]["Port2"])
+    viavi_saved = saved.get("viavi_config")
+    viavi = _default_viavi_config()
+    if isinstance(viavi_saved, dict):
+        for node in ("NumOne", "NumTwo"):
+            node_saved = viavi_saved.get(node)
+            if not isinstance(node_saved, dict):
+                continue
+            viavi[node]["ipaddr"] = node_saved.get("ipaddr", "") or ""
+            typeofport_saved = node_saved.get("typeofport")
+            if isinstance(typeofport_saved, dict):
+                for port in ("Port1", "Port2"):
+                    viavi[node]["typeofport"][port] = typeofport_saved.get(port, "") or ""
+
+    st.session_state["viavi_config"] = viavi
+    st.session_state["viavi1_ip"] = viavi["NumOne"]["ipaddr"]
+    st.session_state["viavi1_port1"] = viavi["NumOne"]["typeofport"]["Port1"]
+    st.session_state["viavi1_port2"] = viavi["NumOne"]["typeofport"]["Port2"]
+    st.session_state["viavi2_ip"] = viavi["NumTwo"]["ipaddr"]
+    st.session_state["viavi2_port1"] = viavi["NumTwo"]["typeofport"]["Port1"]
+    st.session_state["viavi2_port2"] = viavi["NumTwo"]["typeofport"]["Port2"]
 
 
 def on_change() -> None:
@@ -97,10 +107,7 @@ def on_change() -> None:
 
 
 def viavi_sync_from_widgets() -> None:
-    viavi = st.session_state.setdefault("viavi_config", {
-        "NumOne": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
-        "NumTwo": {"ipaddr": "", "typeofport": {"Port1": "", "Port2": ""}},
-    })
+    viavi = st.session_state.setdefault("viavi_config", _default_viavi_config())
     viavi["NumOne"]["ipaddr"] = st.session_state.get("viavi1_ip", "")
     viavi["NumOne"]["typeofport"]["Port1"] = st.session_state.get("viavi1_port1", "")
     viavi["NumOne"]["typeofport"]["Port2"] = st.session_state.get("viavi1_port2", "")

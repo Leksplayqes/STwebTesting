@@ -24,8 +24,8 @@ def main() -> None:
     )
     st.markdown("---")
 
-    initialize_session_state()
     apply_state()
+    initialize_session_state()
 
     with st.sidebar:
         sidebar_ui()
