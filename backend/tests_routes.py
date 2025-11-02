@@ -5,7 +5,6 @@ import os
 import re
 import sys
 import time
-import threading
 import uuid
 from subprocess import PIPE, STDOUT, Popen
 from typing import Dict, List
@@ -15,14 +14,18 @@ from fastapi.responses import FileResponse
 
 from .config import PROJECT_ROOT, REPORT_DIR, ensure_config
 from .jobs import job_path, load_jobs_on_startup, save_job
-from .logs import add_log
 from .models import TestsRunRequest
 from .result_repository import TEST_RESULTS
-from .snmp_proxy import ensure_tunnel, register_tunnel_user, release_tunnel_user, tunnel_alive
-from .state import RUNNING_PROCS
+from .snmp_proxy import (
+    TunnelConfigurationError,
+    TunnelManagerError,
+    TunnelPortsBusyError,
+    reserve_tunnel,
+)
+from .state import ACTIVE_TUNNEL_LEASES, ACTIVE_TUNNEL_LOCK, RUNNING_PROCS
 from .test_catalogs import ALARM_TESTS_CATALOG, SYNC_TESTS_CATALOG
 
-router = APIRouter(prefix="/tests")
+router = APIRouter(prefix="/tests", tags=["tests"])
 
 
 @router.get("/types")
@@ -50,16 +53,30 @@ def tests_run(req: TestsRunRequest, background_tasks: BackgroundTasks):
     if not nodeids:
         raise HTTPException(status_code=400, detail="Не выбраны тесты для запуска")
 
-    register_tunnel_user(job_id)
+    cfg = ensure_config()
+    ip = (cfg.get("CurrentEQ") or {}).get("ipaddr") or ""
+    password = (cfg.get("CurrentEQ") or {}).get("pass") or ""
+    if not ip:
+        raise HTTPException(status_code=400, detail="Не настроен IP оборудования для запуска тестов")
 
+    lease_key = _lease_key(job_id)
     try:
-        cfg = ensure_config()
-        ip = (cfg.get("CurrentEQ") or {}).get("ipaddr") or ""
-        password = (cfg.get("CurrentEQ") or {}).get("pass") or ""
-        if ip and not tunnel_alive():
-            threading.Thread(target=ensure_tunnel, args=(ip, "admin", password), daemon=True).start()
-    except Exception as exc:
-        add_log(f"ensure_tunnel pre-start failed: {exc}", "ERROR")
+        lease = reserve_tunnel(
+            lease_key,
+            "tests",
+            ip=ip,
+            username="admin",
+            password=password,
+            ttl=3600.0,
+        )
+        with ACTIVE_TUNNEL_LOCK:
+            ACTIVE_TUNNEL_LEASES[lease_key] = lease
+    except TunnelPortsBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except TunnelConfigurationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TunnelManagerError as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка подготовки туннеля: {exc}") from exc
 
     started = time.time()
     job_payload: Dict[str, object] = {
@@ -81,16 +98,24 @@ def tests_run(req: TestsRunRequest, background_tasks: BackgroundTasks):
         "returncode": None,
         "expected_total": None,
     }
-    record = TEST_RESULTS.create(
-        record_id=job_id,
-        type="tests",
-        status="running",
-        payload=job_payload,
-        started_at=started,
-    )
-    save_job(job_id)
+    try:
+        record = TEST_RESULTS.create(
+            record_id=job_id,
+            type="tests",
+            status="running",
+            payload=job_payload,
+            started_at=started,
+        )
+        save_job(job_id)
+    except Exception:
+        _release_tunnel(job_id)
+        raise
 
-    background_tasks.add_task(_execute_tests, job_id, nodeids)
+    try:
+        background_tasks.add_task(_execute_tests, job_id, nodeids)
+    except Exception:
+        _release_tunnel(job_id)
+        raise
     return {"success": True, "job_id": job_id, "record": record.to_dict()}
 
 
@@ -112,6 +137,7 @@ def tests_stop(job_id: str = Query(...)):
                 finished_at=job["finished"],
             )
             save_job(job_id)
+        _release_tunnel(job_id)
         return {"success": True, "message": "job is not running"}
 
     try:
@@ -145,7 +171,7 @@ def tests_stop(job_id: str = Query(...)):
     )
     save_job(job_id)
     try:
-        release_tunnel_user(job_id)
+        _release_tunnel(job_id)
     except Exception:
         pass
     return {"success": True, "message": "job stopped"}
@@ -161,6 +187,18 @@ def download_jobfile(job_id: str):
 
 def _norm_nodeid(node_id: str) -> str:
     return node_id.replace(" ::", "::").replace(":: ", "::").replace(" / ", "/").strip()
+
+
+def _lease_key(job_id: str) -> str:
+    return f"tests:{job_id}"
+
+
+def _release_tunnel(job_id: str) -> None:
+    key = _lease_key(job_id)
+    with ACTIVE_TUNNEL_LOCK:
+        lease = ACTIVE_TUNNEL_LEASES.pop(key, None)
+    if lease:
+        lease.release()
 
 
 def _recalc_summary(cases: List[Dict[str, object]], finished: bool) -> Dict[str, object]:
@@ -376,10 +414,7 @@ def _execute_tests(job_id: str, nodeids: List[str]) -> None:
             save_job(job_id)
     finally:
         RUNNING_PROCS.pop(job_id, None)
-        try:
-            release_tunnel_user(job_id)
-        except Exception:
-            pass
+        _release_tunnel(job_id)
         if payload.get("finished") is None:
             payload["finished"] = time.time()
             TEST_RESULTS.update(

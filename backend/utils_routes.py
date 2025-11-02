@@ -12,8 +12,14 @@ from checkFunctions.check_conf import check_conf
 from checkFunctions.check_hash import compare_directories_by_hash
 
 from .result_repository import UTIL_RESULTS
+from .snmp_proxy import (
+    TunnelConfigurationError,
+    TunnelManagerError,
+    TunnelPortsBusyError,
+    reserve_tunnel,
+)
 
-router = APIRouter(prefix="/utils")
+router = APIRouter(prefix="/utils", tags=["utils"])
 
 
 def _create_util_record(util_type: str, params: Dict[str, Any]):
@@ -78,10 +84,22 @@ def util_check_conf(req: Dict[str, Any]):
         {"ip": ip, "iterations": iterations, "delay": delay, "password_provided": bool(password)},
     )
     try:
-        result = check_conf(ip=ip, password=password, iterations=iterations, delay_between=delay)
+        with reserve_tunnel(
+            f"utils:{job_id}",
+            "utils",
+            ip=ip,
+            username="admin",
+            password=password,
+            ttl=1800.0,
+        ):
+            result = check_conf(ip=ip, password=password, iterations=iterations, delay_between=delay)
         payload["result"] = result
         record = _finalize_util(job_id, payload, "success")
         return {"success": True, "record": record}
+    except (TunnelPortsBusyError, TunnelConfigurationError, TunnelManagerError) as exc:
+        payload["error"] = str(exc)
+        record = _finalize_util(job_id, payload, "error")
+        return {"success": False, "record": record, "error": str(exc)}
     except Exception as exc:
         payload["error"] = str(exc)
         record = _finalize_util(job_id, payload, "error")
@@ -119,10 +137,22 @@ def util_fpga_reload(req: Dict[str, Any]):
         {"ip": ip, "slot": slot, "max_attempts": max_attempts, "password_provided": bool(password)},
     )
     try:
-        result = fpga_reload(ip=ip, password=password, slot=slot, max_attempts=max_attempts)
+        with reserve_tunnel(
+            f"utils:{job_id}",
+            "utils",
+            ip=ip,
+            username="admin",
+            password=password,
+            ttl=1800.0,
+        ):
+            result = fpga_reload(ip=ip, password=password, slot=slot, max_attempts=max_attempts)
         payload["result"] = result
         record = _finalize_util(job_id, payload, "success")
         return {"success": True, "record": record}
+    except (TunnelPortsBusyError, TunnelConfigurationError, TunnelManagerError) as exc:
+        payload["error"] = str(exc)
+        record = _finalize_util(job_id, payload, "error")
+        return {"success": False, "record": record, "error": str(exc)}
     except Exception as exc:
         payload["error"] = str(exc)
         record = _finalize_util(job_id, payload, "error")

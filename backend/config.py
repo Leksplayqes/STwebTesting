@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 REPORT_DIR: Path = PROJECT_ROOT / "pytest_reports"
@@ -12,7 +12,12 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR: Path = REPORT_DIR / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_CONFIG: Dict[str, Any] = {"CurrentEQ": {"name": "", "ipaddr": "", "pass": "", "slots_dict": {}}}
+DEFAULT_TUNNEL_PORTS: List[int] = [1161, 21161, 31161]
+
+DEFAULT_CONFIG: Dict[str, Any] = {
+    "CurrentEQ": {"name": "", "ipaddr": "", "pass": "", "slots_dict": {}},
+    "TunnelManager": {"ports": DEFAULT_TUNNEL_PORTS},
+}
 
 
 def _detect_project_root(start: Path) -> Path:
@@ -87,13 +92,56 @@ def json_set(path: List[str], value: Any) -> None:
     _atomic_write(CONFIG_FILE, data)
 
 
+def _parse_ports(value: Iterable[Any]) -> List[int]:
+    ports: List[int] = []
+    for item in value:
+        if isinstance(item, str):
+            item = item.strip()
+            if not item:
+                continue
+            if not item.isdigit():
+                raise ValueError(f"invalid port value: {item}")
+            item = int(item)
+        if not isinstance(item, int):
+            raise ValueError(f"invalid port value: {item}")
+        if item <= 0 or item > 65535:
+            raise ValueError(f"port out of range: {item}")
+        if item not in ports:
+            ports.append(item)
+    if not ports:
+        raise ValueError("port list cannot be empty")
+    return ports
+
+
+def get_tunnel_ports() -> List[int]:
+    env_value = os.getenv("OSMK_TUNNEL_PORTS")
+    if env_value:
+        try:
+            return _parse_ports(env_value.split(","))
+        except ValueError as exc:
+            raise ValueError(f"OSMK_TUNNEL_PORTS is invalid: {exc}") from exc
+    try:
+        data = ensure_config()
+    except Exception:
+        return DEFAULT_TUNNEL_PORTS.copy()
+    ports = (data.get("TunnelManager") or {}).get("ports")
+    if ports:
+        try:
+            return _parse_ports(ports if isinstance(ports, list) else str(ports).split(","))
+        except ValueError:
+            pass
+    return DEFAULT_TUNNEL_PORTS.copy()
+
+
 __all__ = [
     "PROJECT_ROOT",
     "REPORT_DIR",
     "JOBS_DIR",
     "CONFIG_FILE",
     "DEFAULT_CONFIG",
+    "DEFAULT_TUNNEL_PORTS",
     "ensure_config",
     "json_input",
     "json_set",
+    "get_tunnel_ports",
 ]

@@ -11,9 +11,10 @@ from MainConnectFunc import equpimentV7, get_device_info
 from .config import ensure_config, json_input, json_set
 from .logs import add_log
 from .models import DeviceInfoRequest, ViaviSettings, ViaviUnitSettings
-from .snmp_proxy import SNMP_PROXY, SNMP_PROXY_LOCK
+from .snmp_proxy import TunnelManagerError, reserve_tunnel
+from .state import ACTIVE_TUNNEL_LEASES, ACTIVE_TUNNEL_LOCK
 
-router = APIRouter()
+router = APIRouter(tags=["device"])
 
 
 def _save_viavi_unit(unit_name: str, unit: ViaviUnitSettings | None) -> None:
@@ -55,18 +56,32 @@ async def device_info(req: DeviceInfoRequest) -> Dict[str, Any]:
     password = req.password or ""
     username = "admin"
 
+    lease_key = "device-info"
+
     def _run_proxy() -> None:
         try:
-            with SNMP_PROXY_LOCK:
-                SNMP_PROXY.start(ip=ip, username=username, password=password)
-        except Exception as exc:
-            add_log(f"SNMP proxy start failed: {exc}", "ERROR")
+            with ACTIVE_TUNNEL_LOCK:
+                old = ACTIVE_TUNNEL_LEASES.pop(lease_key, None)
+            if old:
+                old.release()
+            lease = reserve_tunnel(
+                lease_key,
+                "device",
+                ip=ip,
+                username=username,
+                password=password,
+                ttl=900.0,
+            )
+            with ACTIVE_TUNNEL_LOCK:
+                ACTIVE_TUNNEL_LEASES[lease_key] = lease
+            add_log(
+                f"SNMP tunnel ready at {lease.host}:{lease.port} for {ip}",
+                "INFO",
+            )
+        except TunnelManagerError as exc:
+            add_log(f"SNMP tunnel reservation failed: {exc}", "ERROR")
 
-    if not SNMP_PROXY.proxy or not SNMP_PROXY.proxy._proc_alive():
-        threading.Thread(target=_run_proxy, daemon=True).start()
-        add_log(f"SNMP proxy started for {ip}", "INFO")
-    else:
-        add_log(f"SNMP proxy already running on {ip}", "INFO")
+    threading.Thread(target=_run_proxy, daemon=True).start()
 
     try:
         if req.viavi is not None:

@@ -9,7 +9,7 @@ from fastapi import APIRouter
 from .config import CONFIG_FILE
 from .logs import add_log
 
-router = APIRouter()
+router = APIRouter(tags=["common"])
 
 
 @router.get("/health")
