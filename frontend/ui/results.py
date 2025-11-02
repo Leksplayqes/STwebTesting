@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 
-from frontend.api import api_get, stop_test_job
+from frontend.api import BackendApiClient, BackendApiError
+from frontend.models import TestRunRecord
 from frontend.ui.components import render_runs_list
 
 
@@ -15,21 +16,25 @@ def _render_cases_table(cases: Any, container: st.delta_generator.DeltaGenerator
     if not cases:
         container.info("Идёт сбор результатов…")
         return
-    df = pd.DataFrame(
-        [
+    rows = []
+    for case in cases:
+        if hasattr(case, "model_dump"):
+            data = case.model_dump()
+        else:
+            data = dict(case)
+        rows.append(
             {
-                "Тест": case.get("nodeid") or case.get("name"),
-                "Статус": case.get("status"),
-                "Время, c": case.get("duration"),
-                "Сообщение": (case.get("message") or "")[:300],
+                "Тест": data.get("nodeid") or data.get("name"),
+                "Статус": data.get("status"),
+                "Время, c": data.get("duration"),
+                "Сообщение": (data.get("message") or "")[:300],
             }
-            for case in cases
-        ]
-    )
+        )
+    df = pd.DataFrame(rows)
     container.dataframe(df, use_container_width=True, hide_index=True)
 
 
-def render_results(api_base_url: str) -> None:
+def render_results(client: BackendApiClient) -> None:
     st.header("Результаты тестирования")
 
     list_placeholder = st.container()
@@ -42,7 +47,11 @@ def render_results(api_base_url: str) -> None:
     job_id = None
 
     for _ in range(900):  # до 30 минут
-        records = api_get(api_base_url, "/tests/jobs", timeout=20) or []
+        try:
+            records = client.list_test_jobs()
+        except BackendApiError as exc:
+            st.error(f"Не удалось загрузить историю прогонов: {exc}")
+            return
         with list_placeholder:
             selected = render_runs_list(
                 records,
@@ -53,7 +62,17 @@ def render_results(api_base_url: str) -> None:
         if not selected:
             return
 
-        selected_id = selected.get("id")
+        if isinstance(selected, TestRunRecord):
+            selected_id = selected.id
+        elif hasattr(selected, "id"):
+            selected_id = getattr(selected, "id", None)
+        elif isinstance(selected, dict):
+            selected_id = selected.get("id")
+        else:
+            try:
+                selected_id = dict(selected).get("id")  # type: ignore[arg-type]
+            except Exception:
+                selected_id = None
         if not selected_id:
             status_box.warning("Выберите прогон для отображения.")
             return
@@ -70,24 +89,34 @@ def render_results(api_base_url: str) -> None:
             type="secondary",
             key="stop_test_button",
         ):
-            stop_test_job(api_base_url, job_id)
+            try:
+                response = client.stop_test(job_id)
+            except BackendApiError as exc:
+                st.error(f"Ошибка остановки теста: {exc}")
+            else:
+                if response.success:
+                    st.success(response.message or f"Тест {job_id} остановлен.")
+                else:
+                    st.warning(response.error or "Не удалось остановить тест")
 
-        record = api_get(api_base_url, f"/tests/status?job_id={job_id}", timeout=20) or {}
-        if not record:
-            status_box.error("Не удалось получить состояние прогона.")
+        try:
+            record = client.get_test_status(job_id)
+        except BackendApiError as exc:
+            status_box.error(f"Не удалось получить состояние прогона: {exc}")
             break
-        payload: Dict[str, Any] = record.get("payload") or {}
 
-        summary = payload.get("summary") or {}
-        cases = payload.get("cases") or []
-        expected_total = payload.get("expected_total")
-        passed = summary.get("passed", 0)
-        failed = summary.get("failed", 0)
-        skipped = summary.get("skipped", 0)
+        payload = record.payload
+
+        summary = payload.summary
+        cases = payload.cases or []
+        expected_total = payload.expected_total
+        passed = summary.passed
+        failed = summary.failed
+        skipped = summary.skipped
         done = int(passed) + int(failed) + int(skipped)
 
         status_text = (
-            f"Статус: {summary.get('status', 'running')} — {passed}✅ / {failed}❌ / {skipped}⏭"
+            f"Статус: {summary.status} — {passed}✅ / {failed}❌ / {skipped}⏭"
         )
         if expected_total:
             status_text += f" (готово {done} из {expected_total})"
@@ -100,6 +129,6 @@ def render_results(api_base_url: str) -> None:
         else:
             progress_box.progress(0.0 if done == 0 else min(done / max(len(cases), 1), 1.0))
 
-        if summary.get("status") in {"passed", "failed", "error", "stopped"}:
+        if summary.status in {"passed", "failed", "error", "stopped"}:
             break
         time.sleep(2)
