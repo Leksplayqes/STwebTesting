@@ -160,6 +160,18 @@ def download_jobfile(job_id: str):
     return FileResponse(str(path), media_type="application/json", filename=f"{job_id}.json")
 
 
+@router.get("/report")
+def download_junit_xml(job_id: str):
+    record = TEST_RESULTS.get(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="job not found")
+    payload = record.payload
+    report_path = payload.get("report") if isinstance(payload, dict) else None
+    if not report_path or not os.path.exists(report_path):
+        raise HTTPException(status_code=404, detail="report not found")
+    return FileResponse(report_path, media_type="application/xml", filename=f"{job_id}.xml")
+
+
 def _norm_nodeid(node_id: str) -> str:
     return node_id.replace(" ::", "::").replace(":: ", "::").replace(" / ", "/").strip()
 
