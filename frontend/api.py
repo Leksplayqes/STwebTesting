@@ -10,6 +10,7 @@ from shared.catalogs import ALARM_TESTS_CATALOG, SYNC_TESTS_CATALOG
 
 from .models import (
     DeviceInfo,
+    HistoryLimit,
     StopTestResponse,
     TestCatalogs,
     TestRunRecord,
@@ -71,6 +72,22 @@ class BackendApiClient:
         except ValueError as exc:
             raise BackendApiError(f"{method} {path}: invalid JSON response") from exc
 
+    def _ensure_envelope(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise BackendApiError("unexpected response type")
+        status = payload.get("status")
+        if status != "success":
+            error = payload.get("error") or {}
+            message = error.get("message") or "Backend error"
+            raise BackendApiError(message)
+        return payload
+
+    def _unwrap(self, payload: Dict[str, Any]) -> tuple[Any, Dict[str, Any]]:
+        envelope = self._ensure_envelope(payload)
+        data = envelope.get("data")
+        meta = envelope.get("meta") or {}
+        return data, meta
+
     def _get(self, path: str, *, timeout: Optional[int] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self._request("GET", path, timeout=timeout, params=params)
 
@@ -90,7 +107,7 @@ class BackendApiClient:
         if self._catalog_cache and now - self._catalog_cache[0] < self._catalog_ttl:
             return self._catalog_cache[1]
         try:
-            data = self._get("/tests/types")
+            data, _ = self._unwrap(self._get("/tests/types"))
         except BackendApiError:
             data = {
                 "alarm_tests": ALARM_TESTS_CATALOG,
@@ -100,20 +117,22 @@ class BackendApiClient:
         self._catalog_cache = (now, catalogs)
         return catalogs
 
-    def list_test_jobs(self) -> List[TestRunRecord]:
-        data = self._get("/tests/jobs")
-        return [TestRunRecord.model_validate(item) for item in data or []]
+    def list_test_jobs(self) -> tuple[List[TestRunRecord], List[HistoryLimit]]:
+        data, _ = self._unwrap(self._get("/tests/jobs"))
+        items = [TestRunRecord.model_validate(item) for item in (data or {}).get("items", [])]
+        history = [HistoryLimit.model_validate(item) for item in (data or {}).get("history", [])]
+        return items, history
 
     def get_test_status(self, job_id: str) -> TestRunRecord:
-        data = self._get("/tests/status", params={"job_id": job_id})
+        data, _ = self._unwrap(self._get("/tests/status", params={"job_id": job_id}))
         return TestRunRecord.model_validate(data)
 
     def run_tests(self, payload: Dict[str, Any]) -> TestRunResponse:
-        data = self._post("/tests/run", payload, timeout=120)
+        data = self._ensure_envelope(self._post("/tests/run", payload, timeout=120))
         return TestRunResponse.model_validate(data)
 
     def stop_test(self, job_id: str) -> StopTestResponse:
-        data = self._post("/tests/stop", params={"job_id": job_id})
+        data = self._ensure_envelope(self._post("/tests/stop", params={"job_id": job_id}))
         return StopTestResponse.model_validate(data)
 
     def download_jobfile(self, job_id: str) -> bytes:
@@ -122,12 +141,14 @@ class BackendApiClient:
         return response.content
 
     # Utilities --------------------------------------------------------
-    def list_util_jobs(self) -> List[UtilityJobRecord]:
-        data = self._get("/utils/jobs")
-        return [UtilityJobRecord.model_validate(item) for item in data or []]
+    def list_util_jobs(self) -> tuple[List[UtilityJobRecord], List[HistoryLimit]]:
+        data, _ = self._unwrap(self._get("/utilities/jobs"))
+        items = [UtilityJobRecord.model_validate(item) for item in (data or {}).get("items", [])]
+        history = [HistoryLimit.model_validate(item) for item in (data or {}).get("history", [])]
+        return items, history
 
     def get_util_status(self, job_id: str) -> UtilityJobRecord:
-        data = self._get("/utils/status", params={"job_id": job_id})
+        data, _ = self._unwrap(self._get(f"/utilities/{job_id}"))
         return UtilityJobRecord.model_validate(data)
 
     def run_check_conf(
@@ -139,17 +160,23 @@ class BackendApiClient:
         delay: int = 30,
     ) -> UtilityJobResponse:
         payload = {
-            "ip": ip,
-            "password": password,
-            "iterations": iterations,
-            "delay": delay,
+            "utility": "check_conf",
+            "parameters": {
+                "ip": ip,
+                "password": password,
+                "iterations": iterations,
+                "delay": delay,
+            },
         }
-        data = self._post("/utils/check_conf", payload)
+        data = self._ensure_envelope(self._post("/utilities/run", payload))
         return UtilityJobResponse.model_validate(data)
 
     def run_check_hash(self, *, dir1: str, dir2: str) -> UtilityJobResponse:
-        payload = {"dir1": dir1, "dir2": dir2}
-        data = self._post("/utils/check_hash", payload)
+        payload = {
+            "utility": "check_hash",
+            "parameters": {"dir1": dir1, "dir2": dir2},
+        }
+        data = self._ensure_envelope(self._post("/utilities/run", payload))
         return UtilityJobResponse.model_validate(data)
 
     def run_fpga_reload(
@@ -161,12 +188,15 @@ class BackendApiClient:
         max_attempts: int = 1000,
     ) -> UtilityJobResponse:
         payload = {
-            "ip": ip,
-            "password": password,
-            "slot": slot,
-            "max_attempts": max_attempts,
+            "utility": "fpga_reload",
+            "parameters": {
+                "ip": ip,
+                "password": password,
+                "slot": slot,
+                "max_attempts": max_attempts,
+            },
         }
-        data = self._post("/utils/fpga_reload", payload)
+        data = self._ensure_envelope(self._post("/utilities/run", payload))
         return UtilityJobResponse.model_validate(data)
 
     # Device -----------------------------------------------------------

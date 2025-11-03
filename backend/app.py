@@ -6,14 +6,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .common import router as common_router
 from .device import router as device_router
+from .logging_config import configure_logging
+from .middleware import install_middleware
+from .api_errors import register_exception_handlers
 from .services import get_test_service
 from .tests_routes import router as tests_router
 from .tunnel_routes import router as tunnel_router
 from .utils_routes import router as utils_router
+from .results_routes import router as results_router
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="OSM-K Tester API", version="4.5.0")
+    configure_logging()
+
+    app = FastAPI(title="OSM-K Tester API", version="5.0.0")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -21,12 +27,15 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    install_middleware(app)
+    register_exception_handlers(app)
 
     app.include_router(common_router)
     app.include_router(device_router)
     app.include_router(tests_router)
     app.include_router(tunnel_router)
     app.include_router(utils_router)
+    app.include_router(results_router)
 
     @app.on_event("startup")
     async def _startup() -> None:  # pragma: no cover - FastAPI lifecycle

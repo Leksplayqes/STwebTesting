@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, List
 
 import pandas as pd
 import streamlit as st
 
 from frontend.api import BackendApiClient, BackendApiError
-from frontend.models import TestRunRecord
+from frontend.models import HistoryLimit, JobSummary, TestRunRecord
 from frontend.ui.components import render_runs_list
 
 
@@ -62,11 +62,28 @@ def _render_cases_table(cases: Any, container: st.delta_generator.DeltaGenerator
     container.dataframe(df, use_container_width=True, hide_index=True)
 
 
+STATUS_LABELS = {
+    "queued": "в очереди",
+    "running": "выполняется",
+    "completed": "завершено",
+    "failed": "завершено с ошибкой",
+    "stopped": "остановлено",
+}
+
+
+def _format_history(history: List[HistoryLimit]) -> str:
+    if not history:
+        return ""
+    limit = history[0]
+    return f"История хранит не более {limit.limit} записей (сейчас {limit.total})."
+
+
 def render_results(client: BackendApiClient) -> None:
     st.header("Результаты тестирования")
 
     list_placeholder = st.container()
     caption_box = st.empty()
+    history_box = st.empty()
     stop_placeholder = st.empty()
     status_box = st.empty()
     table_box = st.empty()
@@ -76,10 +93,11 @@ def render_results(client: BackendApiClient) -> None:
 
     for _ in range(900):  # до 30 минут
         try:
-            records = client.list_test_jobs()
+            records, history = client.list_test_jobs()
         except BackendApiError as exc:
             st.error(f"Не удалось загрузить историю прогонов: {exc}")
             return
+        history_box.info(_format_history(history)) if history else history_box.empty()
         with list_placeholder:
             selected = render_runs_list(
                 records,
@@ -128,17 +146,19 @@ def render_results(client: BackendApiClient) -> None:
 
         payload = record.payload
 
-        summary = payload.summary
+        summary: JobSummary = payload.summary or record.summary or JobSummary(status=record.status)
         cases = payload.cases or []
         expected_total = payload.expected_total
-        passed = summary.passed
-        failed = summary.failed
-        skipped = summary.skipped
+        passed = int(summary.passed or 0)
+        failed = int(summary.failed or 0)
+        skipped = int(summary.skipped or 0)
         done = int(passed) + int(failed) + int(skipped)
 
-        status_text = (
-            f"Статус: {summary.status} — {passed}✅ / {failed}❌ / {skipped}⏭"
-        )
+        status_label = STATUS_LABELS.get(record.status, record.status)
+        status_text = f"Статус: {status_label}"
+        if summary.status and summary.status != record.status:
+            status_text += f" (результат: {summary.status})"
+        status_text += f" — {passed}✅ / {failed}❌ / {skipped}⏭"
         if expected_total:
             status_text += f" (готово {done} из {expected_total})"
         status_box.write(status_text)
@@ -150,6 +170,6 @@ def render_results(client: BackendApiClient) -> None:
         else:
             progress_box.progress(0.0 if done == 0 else min(done / max(len(cases), 1), 1.0))
 
-        if summary.status in {"passed", "failed", "error", "stopped"}:
+        if record.status in {"completed", "failed", "stopped"}:
             break
         time.sleep(2)
