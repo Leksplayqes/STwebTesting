@@ -20,6 +20,7 @@ class ResultRecord:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     payload: Dict[str, Any] = field(default_factory=dict)
+    summary: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -31,6 +32,7 @@ class ResultRecord:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "payload": self.payload,
+            "summary": self.summary,
         }
 
 
@@ -45,6 +47,13 @@ class ResultRepository:
     def _evict_if_needed(self) -> None:
         while len(self._items) > self._limit:
             self._items.popitem(last=False)
+
+    @staticmethod
+    def _extract_summary(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        summary = payload.get("summary")
+        return summary if isinstance(summary, dict) else {}
 
     def list(self) -> List[ResultRecord]:
         with self._lock:
@@ -77,6 +86,7 @@ class ResultRepository:
             started_at=started_at,
             finished_at=finished_at,
             payload=payload,
+            summary=self._extract_summary(payload),
         )
         with self._lock:
             if record_id in self._items:
@@ -103,6 +113,7 @@ class ResultRepository:
                 record.status = status
             if payload is not None:
                 record.payload = payload
+                record.summary = self._extract_summary(payload)
             if started_at is not None:
                 record.started_at = started_at
             if finished_at is not None:
@@ -121,6 +132,22 @@ class ResultRepository:
     def values(self) -> Iterable[ResultRecord]:
         with self._lock:
             return tuple(self._items.values())
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._items)
+
+    def delete(self, record_id: str) -> bool:
+        with self._lock:
+            try:
+                self._items.pop(record_id)
+            except KeyError:
+                return False
+            return True
 
 
 __all__ = [

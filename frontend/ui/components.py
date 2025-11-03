@@ -32,7 +32,7 @@ def _to_dict(record: Any) -> Dict[str, Any]:
 
 def _describe_record(record: Dict[str, Any]) -> str:
     payload = record.get("payload") or {}
-    summary = payload.get("summary") or {}
+    summary = record.get("summary") or payload.get("summary") or {}
     if summary:
         return (
             f"{summary.get('total', 0)} тестов: "
@@ -75,8 +75,8 @@ def render_runs_list(
     data = []
     for raw, _ in prepared:
         payload = raw.get("payload") or {}
-        summary = payload.get("summary") or {}
-        duration = payload.get("duration")
+        summary = raw.get("summary") or payload.get("summary") or {}
+        duration = payload.get("duration") or summary.get("duration")
         if duration is None:
             duration = summary.get("duration")
         data.append(

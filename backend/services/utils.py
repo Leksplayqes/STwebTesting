@@ -12,6 +12,12 @@ from checkFunctions.check_KSequal import fpga_reload
 from checkFunctions.check_conf import check_conf
 from checkFunctions.check_hash import compare_directories_by_hash
 
+from ..models import (
+    CheckConfParameters,
+    CheckHashParameters,
+    FpgaReloadParameters,
+    UtilityRunRequest,
+)
 from ..result_repository import ResultRepository
 from .tunnels import (
     TunnelConfigurationError,
@@ -51,21 +57,29 @@ class UtilityService:
             "error": None,
             "started": started,
             "finished": None,
+            "summary": {"status": "queued"},
         }
         self._results.create(
             record_id=job_id,
             type=util_type,
-            status="running",
+            status="queued",
             payload=payload,
             started_at=started,
         )
         return job_id, payload
+
+    def _mark_running(self, job_id: str, payload: Dict[str, Any]) -> None:
+        payload.setdefault("summary", {})["status"] = "running"
+        self._results.update(job_id, status="running", payload=payload)
 
     def _finalize(self, job_id: str, payload: Dict[str, Any], status: str) -> Dict[str, Any]:
         finished = time.time()
         payload["finished"] = finished
         started = payload.get("started") or finished
         payload["duration"] = max(finished - started, 0.0)
+        payload.setdefault("summary", {})
+        payload["summary"]["status"] = status
+        payload["summary"]["duration"] = payload.get("duration")
         record = self._results.update(
             job_id,
             status=status,
@@ -75,92 +89,116 @@ class UtilityService:
         return record.to_dict()
 
     # Public utility operations ---------------------------------------
-    def check_conf(self, req: Dict[str, Any]) -> Dict[str, Any]:
-        ip = (req or {}).get("ip") or ""
-        password = (req or {}).get("password") or ""
-        iterations = int((req or {}).get("iterations", 3))
-        delay = int((req or {}).get("delay", 30))
-        if not ip:
+    def check_conf(self, params: CheckConfParameters) -> Dict[str, Any]:
+        if not params.ip:
             raise HTTPException(status_code=400, detail="ip is required")
 
         job_id, payload = self._create_record(
             "check_conf",
-            {"ip": ip, "iterations": iterations, "delay": delay, "password_provided": bool(password)},
+            {
+                "ip": params.ip,
+                "iterations": params.iterations,
+                "delay": params.delay,
+                "password_provided": bool(params.password),
+            },
         )
         lease_key = f"utils:{job_id}"
         try:
             with self._tunnel_service.reserve(
                 lease_key,
                 "utils",
-                ip=ip,
+                ip=params.ip,
                 username="admin",
-                password=password,
+                password=params.password or "",
                 ttl=1800.0,
             ):
-                result = check_conf(ip=ip, password=password, iterations=iterations, delay_between=delay)
+                self._mark_running(job_id, payload)
+                result = check_conf(
+                    ip=params.ip,
+                    password=params.password or "",
+                    iterations=params.iterations,
+                    delay_between=params.delay,
+                )
             payload["result"] = result
-            record = self._finalize(job_id, payload, "success")
+            record = self._finalize(job_id, payload, "completed")
             return {"success": True, "record": record}
         except (TunnelPortsBusyError, TunnelConfigurationError, TunnelManagerError) as exc:
             payload["error"] = str(exc)
-            record = self._finalize(job_id, payload, "error")
+            record = self._finalize(job_id, payload, "failed")
             return {"success": False, "record": record, "error": str(exc)}
         except Exception as exc:
             payload["error"] = str(exc)
-            record = self._finalize(job_id, payload, "error")
+            record = self._finalize(job_id, payload, "failed")
             return {"success": False, "record": record, "error": str(exc)}
 
-    def check_hash(self, req: Dict[str, Any]) -> Dict[str, Any]:
-        dir1 = (req or {}).get("dir1")
-        dir2 = (req or {}).get("dir2")
-        if not dir1 or not dir2:
+    def check_hash(self, params: CheckHashParameters) -> Dict[str, Any]:
+        if not params.dir1 or not params.dir2:
             raise HTTPException(status_code=400, detail="dir1 and dir2 are required")
 
-        job_id, payload = self._create_record("check_hash", {"dir1": dir1, "dir2": dir2})
+        job_id, payload = self._create_record(
+            "check_hash", {"dir1": params.dir1, "dir2": params.dir2}
+        )
         try:
-            result = compare_directories_by_hash(dir1, dir2)
+            self._mark_running(job_id, payload)
+            result = compare_directories_by_hash(params.dir1, params.dir2)
             payload["result"] = result
-            record = self._finalize(job_id, payload, "success")
+            record = self._finalize(job_id, payload, "completed")
             return {"success": True, "record": record}
         except Exception as exc:
             payload["error"] = str(exc)
-            record = self._finalize(job_id, payload, "error")
+            record = self._finalize(job_id, payload, "failed")
             return {"success": False, "record": record, "error": str(exc)}
 
-    def fpga_reload(self, req: Dict[str, Any]) -> Dict[str, Any]:
-        ip = (req or {}).get("ip") or ""
-        password = (req or {}).get("password") or ""
-        slot = int((req or {}).get("slot", 9))
-        max_attempts = int((req or {}).get("max_attempts", 1000))
-        if not ip:
+    def fpga_reload(self, params: FpgaReloadParameters) -> Dict[str, Any]:
+        if not params.ip:
             raise HTTPException(status_code=400, detail="ip is required")
 
         job_id, payload = self._create_record(
             "fpga_reload",
-            {"ip": ip, "slot": slot, "max_attempts": max_attempts, "password_provided": bool(password)},
+            {
+                "ip": params.ip,
+                "slot": params.slot,
+                "max_attempts": params.max_attempts,
+                "password_provided": bool(params.password),
+            },
         )
         lease_key = f"utils:{job_id}"
         try:
             with self._tunnel_service.reserve(
                 lease_key,
                 "utils",
-                ip=ip,
+                ip=params.ip,
                 username="admin",
-                password=password,
+                password=params.password or "",
                 ttl=1800.0,
             ):
-                result = fpga_reload(ip=ip, password=password, slot=slot, max_attempts=max_attempts)
+                self._mark_running(job_id, payload)
+                result = fpga_reload(
+                    ip=params.ip,
+                    password=params.password or "",
+                    slot=params.slot,
+                    max_attempts=params.max_attempts,
+                )
             payload["result"] = result
-            record = self._finalize(job_id, payload, "success")
+            record = self._finalize(job_id, payload, "completed")
             return {"success": True, "record": record}
         except (TunnelPortsBusyError, TunnelConfigurationError, TunnelManagerError) as exc:
             payload["error"] = str(exc)
-            record = self._finalize(job_id, payload, "error")
+            record = self._finalize(job_id, payload, "failed")
             return {"success": False, "record": record, "error": str(exc)}
         except Exception as exc:
             payload["error"] = str(exc)
-            record = self._finalize(job_id, payload, "error")
+            record = self._finalize(job_id, payload, "failed")
             return {"success": False, "record": record, "error": str(exc)}
+
+    def run(self, request: UtilityRunRequest) -> Dict[str, Any]:
+        if request.utility == "check_conf":
+            return self.check_conf(CheckConfParameters.model_validate(request.parameters))
+        if request.utility == "check_hash":
+            return self.check_hash(CheckHashParameters.model_validate(request.parameters))
+        if request.utility == "fpga_reload":
+            return self.fpga_reload(FpgaReloadParameters.model_validate(request.parameters))
+        raise HTTPException(status_code=400, detail=f"Unsupported utility {request.utility}")
 
     @property
     def results(self) -> ResultRepository:

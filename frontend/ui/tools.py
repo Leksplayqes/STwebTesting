@@ -4,7 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from frontend.api import BackendApiClient, BackendApiError
-from frontend.models import UtilityJobRecord, UtilityJobResponse
+from frontend.models import HistoryLimit, UtilityJobRecord, UtilityJobResponse
 from frontend.ui.components import render_runs_list
 
 
@@ -92,11 +92,17 @@ def render_utils(client: BackendApiClient) -> None:
 
     st.markdown("---")
     st.subheader("История запусков утилит")
+    history_box = st.empty()
     try:
-        records = client.list_util_jobs()
+        records, history = client.list_util_jobs()
     except BackendApiError as exc:
         st.error(f"Не удалось загрузить историю утилит: {exc}")
-        records = []
+        records, history = [], []
+    if history:
+        limit = history[0]
+        history_box.info(
+            f"История хранит не более {limit.limit} запусков утилит (сейчас {limit.total})."
+        )
     selected = render_runs_list(
         records,
         key_prefix="utils",

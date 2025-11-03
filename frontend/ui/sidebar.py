@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from frontend.api import BackendApiClient, BackendApiError
+from pydantic import BaseModel
 
 from frontend.api import BackendApiClient, BackendApiError
 
@@ -12,7 +12,7 @@ def sidebar_ui(client: BackendApiClient, api_base: str) -> None:
     st.subheader("Быстрые действия")
 
     try:
-        records = client.list_test_jobs()
+        records, _ = client.list_test_jobs()
     except BackendApiError as exc:
         st.warning(f"Не удалось загрузить список тестов: {exc}")
         records = []

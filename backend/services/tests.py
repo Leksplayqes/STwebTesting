@@ -100,7 +100,7 @@ class TestExecutionService:
             "started": started,
             "finished": None,
             "summary": {
-                "status": "running",
+                "status": "queued",
                 "total": 0,
                 "passed": 0,
                 "failed": 0,
@@ -118,7 +118,7 @@ class TestExecutionService:
             record = self._results.create(
                 record_id=job_id,
                 type="tests",
-                status="running",
+                status="queued",
                 payload=payload,
                 started_at=started,
             )
@@ -238,6 +238,7 @@ class TestExecutionService:
                 },
             }
         )
+        payload["summary"]["status"] = "running"
         self._results.update(job_id, status="running", payload=payload)
         save_job(job_id, self._results)
 
@@ -266,9 +267,10 @@ class TestExecutionService:
                         cases_map[nodeid] = case
                         payload["cases"] = list(cases_map.values())
                         payload["summary"] = _recalc_summary(payload["cases"], finished=False)
+                        state = "running"
                         self._results.update(
                             job_id,
-                            status=payload["summary"].get("status", "running"),
+                            status=state,
                             payload=payload,
                         )
                         save_job(job_id, self._results)
@@ -291,9 +293,10 @@ class TestExecutionService:
                             final_map[nodeid] = merged
                     payload["cases"] = list(final_map.values())
                     payload["summary"] = _recalc_summary(payload["cases"], finished=True)
+                    final_state = "completed" if payload["summary"].get("status") == "passed" else "failed"
                     self._results.update(
                         job_id,
-                        status=payload["summary"].get("status", "finished"),
+                        status=final_state,
                         payload=payload,
                         finished_at=payload.get("finished"),
                     )
@@ -310,7 +313,7 @@ class TestExecutionService:
                     }
                     self._results.update(
                         job_id,
-                        status="error",
+                        status="failed",
                         payload=payload,
                         finished_at=payload.get("finished"),
                     )
@@ -327,7 +330,7 @@ class TestExecutionService:
                 }
                 self._results.update(
                     job_id,
-                    status="error",
+                    status="failed",
                     payload=payload,
                     finished_at=payload.get("finished"),
                 )

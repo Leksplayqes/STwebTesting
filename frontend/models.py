@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TestCatalogs(BaseModel):
@@ -19,19 +19,19 @@ class TestCase(BaseModel):
     message: Optional[str] = None
 
 
-class TestRunSummary(BaseModel):
-    status: str = "running"
-    total: int = 0
-    passed: int = 0
-    failed: int = 0
-    skipped: int = 0
-    duration: float = 0.0
+class JobSummary(BaseModel):
+    status: str = "queued"
+    total: Optional[int] = None
+    passed: Optional[int] = None
+    failed: Optional[int] = None
+    skipped: Optional[int] = None
+    duration: Optional[float] = None
     message: Optional[str] = None
 
 
 class TestRunPayload(BaseModel):
     id: str
-    summary: TestRunSummary = Field(default_factory=TestRunSummary)
+    summary: JobSummary = Field(default_factory=JobSummary)
     cases: List[TestCase] = Field(default_factory=list)
     stdout: str = ""
     stderr: str = ""
@@ -46,10 +46,17 @@ class TestRunRecord(BaseModel):
     type: str
     status: str
     payload: TestRunPayload = Field(default_factory=TestRunPayload)
+    summary: Optional[JobSummary] = None
     created_at: Optional[float] = None
     updated_at: Optional[float] = None
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _sync_summary(self) -> "TestRunRecord":
+        if not self.summary and isinstance(self.payload.summary, JobSummary):
+            self.summary = self.payload.summary
+        return self
 
 
 class DeviceInfo(BaseModel):
@@ -69,6 +76,7 @@ class UtilityJobPayload(BaseModel):
     started: Optional[float] = None
     finished: Optional[float] = None
     duration: Optional[float] = None
+    summary: Optional[JobSummary] = None
 
 
 class UtilityJobRecord(BaseModel):
@@ -76,39 +84,78 @@ class UtilityJobRecord(BaseModel):
     type: str
     status: str
     payload: UtilityJobPayload = Field(default_factory=UtilityJobPayload)
+    summary: Optional[JobSummary] = None
     created_at: Optional[float] = None
     updated_at: Optional[float] = None
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
 
-
-class TestRunResponse(BaseModel):
-    success: bool
-    job_id: Optional[str] = None
-    record: Optional[TestRunRecord] = None
-    error: Optional[str] = None
-
-
-class UtilityJobResponse(BaseModel):
-    success: bool
-    record: Optional[UtilityJobRecord] = None
-    error: Optional[str] = None
+    @model_validator(mode="after")
+    def _sync_summary(self) -> "UtilityJobRecord":
+        if not self.summary and isinstance(self.payload.summary, JobSummary):
+            self.summary = self.payload.summary
+        return self
 
 
-class StopTestResponse(BaseModel):
-    success: bool
-    message: Optional[str] = None
-    error: Optional[str] = None
+class HistoryLimit(BaseModel):
+    type: str
+    limit: int
+    total: int
+
+
+class MetaResponse(BaseModel):
+    status: str = "success"
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def success(self) -> bool:
+        return bool(self.meta.get("success", True))
+
+    @property
+    def error(self) -> Optional[str]:
+        value = self.meta.get("error")
+        return str(value) if value is not None else None
+
+    @property
+    def message(self) -> Optional[str]:
+        value = self.meta.get("message")
+        return str(value) if value is not None else None
+
+
+class TestRunResponse(MetaResponse):
+    data: Optional[TestRunRecord] = None
+
+    @property
+    def record(self) -> Optional[TestRunRecord]:
+        return self.data
+
+    @property
+    def job_id(self) -> Optional[str]:
+        value = self.meta.get("job_id")
+        return str(value) if value is not None else None
+
+
+class UtilityJobResponse(MetaResponse):
+    data: Optional[UtilityJobRecord] = None
+
+    @property
+    def record(self) -> Optional[UtilityJobRecord]:
+        return self.data
+
+
+class StopTestResponse(MetaResponse):
+    data: Dict[str, Any] = Field(default_factory=dict)
 
 
 __all__ = [
     "DeviceInfo",
     "TestCatalogs",
     "TestCase",
+    "JobSummary",
+    "HistoryLimit",
     "TestRunPayload",
     "TestRunRecord",
     "TestRunResponse",
-    "TestRunSummary",
     "UtilityJobPayload",
     "UtilityJobRecord",
     "UtilityJobResponse",
